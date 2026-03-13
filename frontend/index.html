@@ -139,8 +139,8 @@
           </div>
 
           <h3 class="font-medium mb-2">待测接口</h3>
-          <p class="text-xs text-gray-500 mb-2">每行一个：路径 或 路径,方法,权重。例：/api/health 或 /api/items,GET,2</p>
-          <textarea id="perftest-endpoints" rows="5" class="w-full border rounded px-3 py-2 font-mono text-sm" placeholder="/api/health&#10;/api/items/slow,GET,2&#10;/api/items,GET,1"></textarea>
+          <p class="text-xs text-gray-500 mb-2">每行一个：路径 或 路径,方法,权重。支持 GET/POST/PUT/DELETE。例：/api/items,POST,1 或 /api/items,GET,2</p>
+          <textarea id="perftest-endpoints" rows="5" class="w-full border rounded px-3 py-2 font-mono text-sm" placeholder="/api/health&#10;/api/items/slow,GET,2&#10;/api/items,GET,1&#10;/api/items,POST,1"></textarea>
           <div class="mt-2 flex gap-2">
             <button type="button" id="btn-save-perftest" class="px-3 py-1 bg-gray-600 text-white rounded text-sm">保存压测配置</button>
             <button id="btn-run-perftest" class="px-4 py-2 bg-orange-600 text-white rounded hover:bg-orange-700">Run Perf Test</button>

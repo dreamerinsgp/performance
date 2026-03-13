@@ -1,11 +1,28 @@
 """Generate Locust test file from perftest config."""
+import json
 from typing import List
+
+
+def _body_to_py(body_str: str) -> str:
+    """Convert JSON body string to Python dict literal for generated code."""
+    try:
+        return repr(json.loads(body_str))
+    except (json.JSONDecodeError, TypeError):
+        return "{}"
+
+
+def _default_post_body(path: str) -> str:
+    """Default JSON body for POST requests."""
+    if "/items" in path and "items/" not in path:
+        return '{"name": "perf-test", "description": "load test"}'
+    return "{}"
 
 
 def generate_locustfile(endpoints: List[dict]) -> str:
     """
     Generate locustfile.py content from endpoint config.
     endpoints: [{"path": "/api/health", "method": "GET", "weight": 1}, ...]
+    POST/PUT can have optional "body" field (JSON string).
     """
     if not endpoints:
         return _fallback_locustfile()
@@ -19,11 +36,29 @@ def generate_locustfile(endpoints: List[dict]) -> str:
         task_name = f"task_{i}"
 
         if method == "POST":
+            body_str = ep.get("body") or _default_post_body(path)
+            body_py = _body_to_py(body_str)
             task_lines.append(f'''
     @task({weight})
     def {task_name}(self):
         """{method} {path}"""
-        self.client.post("{path}", name="{name}")
+        self.client.post("{path}", json={body_py}, name="{name}")
+''')
+        elif method == "PUT":
+            body_str = ep.get("body") or "{}"
+            body_py = _body_to_py(body_str)
+            task_lines.append(f'''
+    @task({weight})
+    def {task_name}(self):
+        """{method} {path}"""
+        self.client.put("{path}", json={body_py}, name="{name}")
+''')
+        elif method == "DELETE":
+            task_lines.append(f'''
+    @task({weight})
+    def {task_name}(self):
+        """{method} {path}"""
+        self.client.delete("{path}", name="{name}")
 ''')
         else:
             task_lines.append(f'''

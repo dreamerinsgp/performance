@@ -115,7 +115,7 @@ POST /api/deploy/webhook?token=xxx
 
 类 JMeter，可配置：
 
-- **待测接口**：每行 `路径` 或 `路径,方法,权重`，例：`/api/health` 或 `/api/items,GET,2`
+- **待测接口**：每行 `路径` 或 `路径,方法,权重`，支持 GET/POST/PUT/DELETE。例：`/api/items,POST,1` 或 `/api/items,GET,2`
 - **线程数**：虚拟用户数
 - **启动时间**：多少秒内启动全部线程
 - **执行时长**：压测持续时间
