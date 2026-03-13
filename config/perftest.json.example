@@ -1,0 +1,10 @@
+{
+  "endpoints": [
+    {"path": "/api/health", "method": "GET", "weight": 1},
+    {"path": "/api/items/slow", "method": "GET", "weight": 2},
+    {"path": "/api/items", "method": "GET", "weight": 1}
+  ],
+  "users": 50,
+  "ramp_up_seconds": 10,
+  "duration_seconds": 30
+}

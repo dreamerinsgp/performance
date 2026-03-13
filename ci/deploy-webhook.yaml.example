@@ -1,0 +1,38 @@
+# 借鉴现有 dex-gateway-test / Jenkins Webhook 模式
+# 复制到项目 .github/workflows/deploy-perf.yaml，配置 DASHBOARD_URL 和 DEPLOY_TOKEN 后可实现 tag 触发部署
+#
+# 用法：
+#   1. 在 Dashboard 配置好 Infra（MySQL/Redis/Kafka、项目服务器等）
+#   2. 设置环境变量 PERF_DEPLOY_TOKEN（Dashboard 启动时）
+#   3. 在 GitHub 仓库 Settings → Secrets 添加 DASHBOARD_URL、DEPLOY_TOKEN
+#   4. 推送 tag 如 dex-deploy/v1.0.0 触发部署
+
+name: Deploy via Dashboard Webhook
+
+on:
+  push:
+    tags:
+      - 'dex-deploy/v*'   # 或 v* 等
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Dashboard Deploy
+        run: |
+          url="${DASHBOARD_URL}/api/deploy/webhook"
+          if [ -n "$DEPLOY_TOKEN" ]; then
+            url="${url}?token=${DEPLOY_TOKEN}"
+          fi
+          resp=$(curl -s -w "\n%{http_code}" -X POST "$url")
+          code=$(echo "$resp" | tail -n1)
+          body=$(echo "$resp" | sed '$d')
+          echo "$body"
+          if [ "$code" != "200" ]; then
+            echo "Deploy failed: HTTP $code"
+            exit 1
+          fi
+          echo "Deploy triggered successfully."
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}

@@ -1,0 +1,15 @@
+# Run the Ops Dashboard
+# Usage: docker compose up -d
+# Open http://localhost:8000
+
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config
+      - ../dex_full:/app/dex_full:ro  # For deploy script to find apps
+    environment:
+      - PERF_CONFIG=/app/config/infra.json
+    restart: unless-stopped

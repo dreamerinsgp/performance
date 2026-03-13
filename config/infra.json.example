@@ -1,0 +1,32 @@
+{
+  "redis": {
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": ""
+  },
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "database": "dexs"
+  },
+  "mysql_init_sql": "CREATE TABLE IF NOT EXISTS items (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, description TEXT, created_at DATETIME, updated_at DATETIME);",
+  "kafka": {
+    "brokers": ["127.0.0.1:9092"]
+  },
+  "app_server": {
+    "host": "127.0.0.1",
+    "ssh_port": 22,
+    "deploy_path": "/opt/dex"
+  },
+  "load_generator": {
+    "host": "127.0.0.1",
+    "ssh_port": 22
+  },
+  "github": {
+    "repo_url": "https://github.com/your-org/dex_full",
+    "branch": "main"
+  },
+  "gateway_url": "http://127.0.0.1:8080"
+}

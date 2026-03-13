@@ -1,0 +1,12 @@
+config/infra.json
+workspace/
+config/perftest*.csv
+config/perftest_report.html
+config/perftest_result*.json
+config/perftest.json
+config/locustfile_generated.py
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
