@@ -1,5 +1,33 @@
 # 案例 01：最大连接数耗尽
 
+## 图示：场景 → 问题 → 解决方案
+
+```mermaid
+flowchart TB
+    subgraph 场景["业务场景：电商秒杀"]
+        A[用户涌入 App] --> B[每秒 5000+ 请求]
+        B --> C[每个请求新建 MySQL 连接]
+        C --> D[用后未归还连接池]
+    end
+
+    subgraph 问题["问题：连接耗尽"]
+        D --> E[连接数快速增长]
+        E --> F[max_connections = 500]
+        F --> G[10 秒后新请求报错]
+        G --> H["Too many connections"]
+        H --> I[用户看到「系统繁忙」]
+    end
+
+    subgraph 解决["解决方案"]
+        J[连接池复用] --> K[避免每请求一连接]
+        L[修复连接泄漏] --> M[确保获取后关闭]
+        N[调整 max_connections] --> O[合理评估容量]
+        P[缩短 wait_timeout] --> Q[释放空闲连接]
+    end
+
+    问题 --> 解决
+```
+
 ## 业务需求场景
 
 **电商平台大促秒杀**

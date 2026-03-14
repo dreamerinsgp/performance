@@ -28,6 +28,8 @@ print('APP_HOST=\"%s\"' % a.get('host','').strip())
 print('APP_SSH_PORT=\"%s\"' % str(a.get('ssh_port',22)))
 print('APP_SSH_USER=\"%s\"' % a.get('ssh_user','root').strip())
 print('APP_DEPLOY_PATH=\"%s\"' % a.get('deploy_path','/opt/dex').strip())
+mo = (a.get('mysql_ops_path') or '').strip() or (a.get('deploy_path','/opt/dex').strip().rstrip('/') + '/mysql-ops-learning')
+print('MYSQL_OPS_PATH=\"%s\"' % mo)
 p = os.environ.get('PERF_SSH_PASSWORD','')
 print('APP_SSH_PASSWORD=\"%s\"' % p.replace('\"','\\\\\"'))
 # MySQL DSN for simple projects (base64 to avoid escaping)
@@ -211,6 +213,17 @@ fi
 # Copy model if exists
 [ -d "$MAKE_DIR/model" ] && rsync -az -e "$RSYNC_SSH" \
   "$MAKE_DIR/model/" "${APP_SSH_USER}@${APP_HOST}:${APP_DEPLOY_PATH}/model/" 2>/dev/null || true
+
+# Sync mysql-ops-learning (MySQL Ops 学习工具) 到应用服务器
+MYSQL_OPS_LOCAL="$PERF_DIR/../mysql-ops-learning"
+MYSQL_OPS_REMOTE="${MYSQL_OPS_PATH:-$APP_DEPLOY_PATH/mysql-ops-learning}"
+if [ -d "$MYSQL_OPS_LOCAL" ] && [ -f "$MYSQL_OPS_LOCAL/go.mod" ]; then
+  echo "Syncing mysql-ops-learning to $MYSQL_OPS_REMOTE..."
+  $SSH_CMD "mkdir -p $MYSQL_OPS_REMOTE" 2>/dev/null || true
+  rsync -az --exclude ".git" --exclude "build" -e "$RSYNC_SSH" \
+    "$MYSQL_OPS_LOCAL/" "${APP_SSH_USER}@${APP_HOST}:${MYSQL_OPS_REMOTE}/" 2>/dev/null && \
+    echo "mysql-ops-learning synced." || echo "Warning: mysql-ops-learning rsync failed (path or SSH issue)."
+fi
 
 # Simple project: decode MySQL DSN locally and rsync to server (avoids remote base64/variable issues)
 if [ "$PROJECT_TYPE" = "simple" ] && [ -n "$MYSQL_DSN_B64" ]; then

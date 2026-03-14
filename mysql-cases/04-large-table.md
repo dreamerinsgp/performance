@@ -1,5 +1,32 @@
 # 案例 04：大表问题
 
+## 图示：场景 → 问题 → 解决方案
+
+```mermaid
+flowchart LR
+    subgraph 场景["业务场景"]
+        A[订单表 5000 万行] --> B[新增 coupon_id 字段]
+        B --> C["ALTER TABLE orders ADD COLUMN ..."]
+    end
+
+    subgraph 问题["问题"]
+        C --> D[默认 COPY 算法]
+        D --> E[重建整张表]
+        E --> F[锁表约 2 小时]
+        F --> G[用户无法下单/查订单]
+        G --> H[大促前夜 → 活动推迟]
+    end
+
+    subgraph 解决["解决方案"]
+        I[MySQL 8.0 ALGORITHM=INPLACE] --> J[在线 DDL 少锁表]
+        K[pt-online-schema-change] --> L[gh-ost]
+        M[分区表] --> N[按范围/哈希拆分]
+        O[数据归档] --> P[缩减表体积]
+    end
+
+    问题 --> 解决
+```
+
 ## 业务需求场景
 
 **订单表加字段导致停服 2 小时**

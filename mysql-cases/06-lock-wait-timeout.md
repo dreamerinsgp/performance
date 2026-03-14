@@ -1,5 +1,34 @@
 # 案例 06：锁等待超时
 
+## 图示：场景 → 问题 → 解决方案
+
+```mermaid
+sequenceDiagram
+    participant 后台 as 后台导出脚本
+    participant 用户 as 前台用户
+    participant DB as users 表
+
+    Note over 后台,DB: 场景：后台导出报表，前台用户修改头像
+
+    后台->>DB: BEGIN; SELECT * FROM users 持锁
+    Note over 后台: 长时间不提交（处理数据）
+    用户->>DB: UPDATE users SET avatar=? WHERE id=?
+    用户->>用户: 等待排他锁...
+    Note over 用户: 超过 50 秒
+    DB-->>用户: Lock wait timeout exceeded
+    用户->>用户: 修改失败，请重试
+
+    Note over 后台,用户: 解决：缩短持锁 / 导出用从库
+```
+
+```mermaid
+flowchart LR
+    问题["持锁过长"] --> A[缩短事务]
+    问题 --> B[导出用只读从库]
+    问题 --> C[INNODB_LOCK_WAITS 定位]
+    问题 --> D[必要时 KILL 阻塞会话]
+```
+
 ## 业务需求场景
 
 **后台导出报表阻塞用户修改资料**

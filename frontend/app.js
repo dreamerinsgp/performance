@@ -298,12 +298,13 @@ $('btn-run-perftest').addEventListener('click', async () => {
 // MySQL Ops - 业务场景 / 现象 / 问题 / 解决方案（前端静态数据作为回退，确保 Run 按钮始终可见）
 const MYSQL_OPS_PROBLEMS_FALLBACK = [
   { id: "01-max-connections", name: "最大连接数耗尽", business_scenario: "电商平台大促秒杀：双11 活动开始瞬间每秒 5000+ 请求，应用每次新建 MySQL 连接且未归还，max_connections=500 约 10 秒后新请求全部报 Too many connections，用户界面显示「系统繁忙，请稍后再试」，活动被迫暂停。", scenario: "应用未正确复用连接，不断创建新连接而不释放。", phenomenon: "新连接报错 Too many connections；Threads_connected 接近 max_connections。", problem: "MySQL 连接数达到上限。", solution: "调整 max_connections；使用连接池；修复连接泄漏。", actions: [{ id: "reproduce", name: "模拟耗尽" }, { id: "monitor", name: "查看状态" }] },
-  { id: "02-slow-log", name: "慢查询监控", business_scenario: "O2O 平台用户搜索订单：输入订单号或手机号查询，要等十几秒才能出结果，有时直接超时。DBA 发现数据库 CPU 偶发飙高，但未开慢查询日志，无法定位是哪条 SQL 导致。", scenario: "线上偶发接口变慢，需定位慢 SQL。", phenomenon: "接口响应时间不稳定；数据库负载波动。", problem: "部分 SQL 执行时间过长，未开启慢日志无法定位。", solution: "开启 slow_query_log；设置 long_query_time；用 pt-query-digest 分析。", actions: [{ id: "reproduce", name: "模拟慢查询" }, { id: "enable", name: "开启慢日志" }] },
+  { id: "02-slow-log", name: "慢查询监控", business_scenario: "O2O 平台用户搜索订单：输入订单号或手机号查询，要等十几秒才能出结果，有时直接超时。DBA 发现数据库 CPU 偶发飙高，但未开慢查询日志，无法定位是哪条 SQL 导致。", scenario: "线上偶发接口变慢，需定位慢 SQL。", phenomenon: "接口响应时间不稳定；数据库负载波动。", problem: "部分 SQL 执行时间过长，未开启慢日志无法定位。", solution: "开启 slow_query_log；设置 long_query_time；用 pt-query-digest 分析。", actions: [{ id: "reproduce", name: "模拟慢查询" }, { id: "enable", name: "开启慢日志" }, { id: "view", name: "查看慢日志" }] },
   { id: "03-large-transaction", name: "大事务", business_scenario: "积分商城周年庆：运营给 10 万用户每人加 100 积分，单事务内 UPDATE 10 万行，执行约 5 分钟才提交。这 5 分钟内所有涉及 user_points 的操作（登录校验、下单扣积分、查询余额）全被阻塞，前台业务几乎停滞。", scenario: "批量更新在单事务内执行过多行。", phenomenon: "其他会话长时间等待；复制延迟；锁等待超时。", problem: "单事务修改大量行，长时间持锁阻塞其他事务。", solution: "拆分为小批次；缩短事务；通过 INNODB_TRX 监控。", actions: [{ id: "reproduce", name: "模拟大事务" }, { id: "detect", name: "检测长事务" }] },
   { id: "04-large-table", name: "大表问题", business_scenario: "订单表 5000 万行需新增 coupon_id 字段。DBA 执行 ALTER TABLE 使用默认 COPY 算法，重建整表约 2 小时，期间表被锁定，用户无法下单、无法查订单，大促前夜执行导致活动推迟。", scenario: "单表数据量持续增长，DDL 耗时过长。", phenomenon: "查询变慢；ALTER TABLE 执行数小时；锁表。", problem: "表过大导致全表扫描、DDL 锁表时间长。", solution: "分区；在线 DDL（pt-osc、gh-ost）；数据归档；合理建索引。", actions: [{ id: "reproduce", name: "模拟大表" }, { id: "analyze", name: "分析表大小" }] },
   { id: "05-deadlock", name: "死锁", business_scenario: "用户 A 给 B 转 100 元、B 同时给 A 转 50 元。两事务均为先锁转出方再锁转入方，形成 A 等 B、B 等 A 的环路，MySQL 检测到死锁回滚其一，用户看到「交易失败，请重试」。", scenario: "多事务并发更新，加锁顺序不一致。", phenomenon: "事务报错 Deadlock found；部分事务被自动回滚。", problem: "事务互相等待对方持有的锁，形成环路。", solution: "统一加锁顺序；死锁后自动重试；缩短事务。", actions: [{ id: "reproduce", name: "模拟死锁" }, { id: "analyze", name: "查看死锁信息" }] },
   { id: "06-lock-wait-timeout", name: "锁等待超时", business_scenario: "SaaS 平台运营导出全部用户报表：事务内 SELECT * FROM users 全表扫描且长时间不提交。前台用户尝试更新头像、昵称需要排他锁，等待超过 50 秒后返回 Lock wait timeout exceeded，用户看到「修改失败，请重试」。", scenario: "事务 A 持锁未提交，事务 B 等待同一行锁。", phenomenon: "报错 Lock wait timeout exceeded；更新/删除失败。", problem: "持锁事务长时间不提交，阻塞其他事务。", solution: "缩短持锁时间；调整 innodb_lock_wait_timeout；定位并 KILL 阻塞会话。", actions: [{ id: "reproduce", name: "模拟等待" }] },
   { id: "07-index-misuse", name: "索引使用不当", business_scenario: "外卖订单表 1000 万行，用户按手机号查订单。WHERE phone=? 无索引，MySQL 全表扫描，单次查询 20~30 秒，接口超时，用户看到「加载失败」，数据库 CPU 长期偏高。", scenario: "查询条件列无索引或索引未被使用。", phenomenon: "单条 SQL 执行很慢；EXPLAIN 显示 type=ALL。", problem: "未建索引或索引不符合查询，导致全表扫描。", solution: "对 WHERE/ORDER BY 列建索引；避免 SELECT *；通过 EXPLAIN 检查。", actions: [{ id: "reproduce", name: "模拟全表扫描" }, { id: "explain", name: "查看执行计划" }] },
+  { id: "08-replication-lag", name: "主从复制延迟", business_scenario: "订单系统主从架构，主库写、从库读报表。大促时从库 Seconds_Behind_Master 持续 30 分钟以上，报表数据严重滞后。", scenario: "主库写入激增，从库单线程 apply binlog 缓慢。", phenomenon: "从库延迟 30+ 分钟；relay log 堆积。", problem: "从库默认单线程复制，大事务导致 binlog 应用跟不上。", solution: "开启 slave_parallel_workers；slave_parallel_type=LOGICAL_CLOCK；拆分大事务。", actions: [{ id: "reproduce", name: "模拟大事务" }, { id: "monitor", name: "监控延迟" }, { id: "detect", name: "检测配置" }] },
 ];
 let MYSQL_OPS_LAST_PROBLEMS = MYSQL_OPS_PROBLEMS_FALLBACK;
 const MYSQL_CODE_MODAL_STATE = { problemId: '', filePath: '' };
@@ -346,6 +347,10 @@ function getProblemHighlightRules(problemId) {
     '07-index-misuse': [
       { keyword: /EXPLAIN|WHERE|ORDER BY|LIKE/i, reason: '索引使用关键 SQL' },
       { keyword: /type=ALL|full scan|全表扫描/i, reason: '全表扫描风险点' },
+    ],
+    '08-replication-lag': [
+      { keyword: /SHOW SLAVE STATUS|Seconds_Behind_Master/i, reason: '从库复制状态' },
+      { keyword: /slave_parallel|binlog|relay/i, reason: '复制相关配置' },
     ],
   };
   return rules[problemId] || [];
@@ -446,6 +451,31 @@ function renderMysqlOpsCards(problems) {
   // 点击由 document 事件委托统一处理，此处无需再绑定
 }
 
+// 将 Markdown 转为 HTML：mermaid 块单独提取，避免 marked 转义；其余用 marked 解析
+function renderMysqlCaseContent(md) {
+  if (!md) return '';
+  const parts = [];
+  let rest = md;
+  const re = /```mermaid\r?\n([\s\S]*?)\r?\n```/gi;
+  let lastIdx = 0;
+  let m;
+  while ((m = re.exec(md)) !== null) {
+    parts.push({ type: 'md', text: md.slice(lastIdx, m.index) });
+    parts.push({ type: 'mermaid', code: m[1].trim() });
+    lastIdx = re.lastIndex;
+  }
+  parts.push({ type: 'md', text: md.slice(lastIdx) });
+  let out = '';
+  for (const p of parts) {
+    if (p.type === 'mermaid') {
+      out += '<div class="mermaid my-4">' + p.code + '</div>';
+    } else if (p.type === 'md' && p.text) {
+      out += typeof marked !== 'undefined' ? marked.parse(p.text) : p.text.replace(/</g, '&lt;');
+    }
+  }
+  return out;
+}
+
 async function openMysqlCaseModal(problemId) {
   const modal = document.getElementById('mysql-case-modal');
   const titleEl = document.getElementById('mysql-case-modal-title');
@@ -454,16 +484,30 @@ async function openMysqlCaseModal(problemId) {
   const backdrop = document.getElementById('mysql-case-modal-backdrop');
   if (!modal || !titleEl || !bodyEl) return;
   titleEl.textContent = '加载中...';
-  bodyEl.textContent = '';
+  bodyEl.innerHTML = '';
   modal.classList.remove('hidden');
   try {
     const res = await fetch(API_BASE + '/api/mysql-ops/case/' + encodeURIComponent(problemId));
     const data = await res.json();
     titleEl.textContent = '完整业务案例 - ' + problemId;
-    bodyEl.textContent = data.content || '无内容';
+    const html = renderMysqlCaseContent(data.content || '无内容');
+    bodyEl.innerHTML = html;
+    if (typeof mermaid !== 'undefined') {
+      const mermaidNodes = bodyEl.querySelectorAll('.mermaid');
+      if (mermaidNodes.length) {
+        try {
+          mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+          await new Promise(r => requestAnimationFrame(r)); // 等待 DOM 绘制
+          await mermaid.run({ nodes: mermaidNodes, suppressErrors: true });
+        } catch (err) {
+          console.warn('Mermaid render:', err);
+          mermaidNodes.forEach(n => { n.innerHTML = '<pre class="text-xs text-amber-600">' + n.textContent + '</pre>'; });
+        }
+      }
+    }
   } catch (e) {
     titleEl.textContent = '加载失败';
-    bodyEl.textContent = 'Error: ' + e.message;
+    bodyEl.innerHTML = '<p class="text-red-600">Error: ' + (e.message || e) + '</p>';
   }
   function closeModal() {
     modal.classList.add('hidden');

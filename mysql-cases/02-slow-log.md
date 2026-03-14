@@ -1,5 +1,32 @@
 # 案例 02：慢查询监控
 
+## 图示：场景 → 问题 → 解决方案
+
+```mermaid
+flowchart LR
+    subgraph 场景["业务场景"]
+        A[用户搜索订单] --> B[按订单号/手机号查询]
+        B --> C[等待十几秒]
+        C --> D[有时超时报错]
+    end
+
+    subgraph 问题["问题"]
+        D --> E[接口逻辑简单]
+        E --> F[怀疑数据库慢]
+        F --> G[❌ 未开慢日志]
+        G --> H[无法定位是哪条 SQL]
+    end
+
+    subgraph 解决["解决方案"]
+        I[slow_query_log=ON] --> J[long_query_time=2]
+        J --> K[慢查询写入日志]
+        K --> L[pt-query-digest 分析]
+        L --> M[加索引 / 改写 SQL]
+    end
+
+    问题 --> 解决
+```
+
 ## 业务需求场景
 
 **用户搜索订单反馈很慢**

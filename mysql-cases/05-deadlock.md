@@ -1,5 +1,35 @@
 # 案例 05：死锁
 
+## 图示：场景 → 问题 → 解决方案
+
+```mermaid
+sequenceDiagram
+    participant Tx1 as 事务1 A→B
+    participant Tx2 as 事务2 B→A
+    participant A as 账户A
+    participant B as 账户B
+
+    Note over Tx1,Tx2: 场景：用户 A 与 B 几乎同时互相转账
+
+    Tx1->>A: 锁 A 的账户行
+    Tx2->>B: 锁 B 的账户行
+    Tx1->>B: 等待 B（被 Tx2 持有）
+    Tx2->>A: 等待 A（被 Tx1 持有）
+
+    Note over Tx1,Tx2: 问题：环路等待 = 死锁<br/>MySQL 回滚其一，用户需重试
+
+    Note over Tx1,Tx2: 解决：统一按 user_id 升序加锁<br/>A 先 B 后，两事务顺序一致，避免死锁
+```
+
+```mermaid
+flowchart TB
+    subgraph 解决["解决方案"]
+        A[统一加锁顺序] --> B["按 user_id 升序：先锁小 ID"]
+        C[死锁后重试] --> D["捕获 err 1213"]
+        E[缩短事务] --> F[减少持锁时间]
+    end
+```
+
 ## 业务需求场景
 
 **用户互相转账导致偶发交易失败**

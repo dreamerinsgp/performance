@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DEX Ops Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    .mysql-case-content h2, .mysql-case-content h3 { margin-top: 1rem; margin-bottom: 0.5rem; font-weight: 600; }
+    .mysql-case-content h2 { font-size: 1.1rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; }
+    .mysql-case-content p { margin-bottom: 0.5rem; }
+    .mysql-case-content ul { margin: 0.5rem 0; padding-left: 1.5rem; list-style: disc; }
+    .mysql-case-content pre { margin: 0.5rem 0; }
+    .mysql-case-content .mermaid { min-height: 120px; display: flex; justify-content: center; align-items: center; }
+  </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
   <div id="app" class="container mx-auto p-6 max-w-6xl">
@@ -229,7 +239,7 @@
               <h3 id="mysql-case-modal-title" class="font-semibold">完整业务案例</h3>
               <button id="mysql-case-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
             </div>
-            <pre id="mysql-case-modal-body" class="p-4 overflow-auto text-sm whitespace-pre-wrap flex-1 font-sans"></pre>
+            <div id="mysql-case-modal-body" class="p-4 overflow-auto text-sm flex-1 mysql-case-content"></div>
             </div>
           </div>
         </div>

@@ -445,6 +445,7 @@ MYSQL_OPS_PROBLEM_DIRS = {
     "05-deadlock": "problems/deadlock",
     "06-lock-wait-timeout": "problems/lockwait",
     "07-index-misuse": "problems/indexmisuse",
+    "08-replication-lag": "problems/replicationlag",
 }
 
 
@@ -476,7 +477,7 @@ MYSQL_OPS_PROBLEMS = [
         "phenomenon": "接口响应时间不稳定；数据库负载波动；用户反馈卡顿。",
         "problem": "部分 SQL 执行时间过长，但未开启慢日志或未设置合适阈值，无法定位具体慢查询。",
         "solution": "1. 开启 slow_query_log；2. 设置 long_query_time（如 2 秒）；3. 使用 pt-query-digest 或 MySQL 工具分析慢日志；4. 针对慢查询加索引或改写。",
-        "actions": [{"id": "reproduce", "name": "模拟慢查询"}, {"id": "enable", "name": "开启慢日志"}],
+        "actions": [{"id": "reproduce", "name": "模拟慢查询"}, {"id": "enable", "name": "开启慢日志"}, {"id": "view", "name": "查看慢日志"}],
     },
     {
         "id": "03-large-transaction",
@@ -522,6 +523,15 @@ MYSQL_OPS_PROBLEMS = [
         "problem": "未建索引或索引不符合查询条件，MySQL 只能全表扫描，数据量大时性能极差。",
         "solution": "1. 对 WHERE/ORDER BY 列建索引；2. 避免 SELECT *；3. 使用覆盖索引；4. 通过 EXPLAIN 检查执行计划。",
         "actions": [{"id": "reproduce", "name": "模拟全表扫描"}, {"id": "explain", "name": "查看执行计划"}],
+    },
+    {
+        "id": "08-replication-lag",
+        "name": "主从复制延迟",
+        "scenario": "主从架构下，主库写入激增（如大促），从库单线程 apply binlog 缓慢，Seconds_Behind_Master 持续增大。",
+        "phenomenon": "从库延迟 30+ 分钟；报表数据滞后；relay log 堆积。",
+        "problem": "从库默认单线程复制，大事务或高写入导致 binlog 应用跟不上主库。",
+        "solution": "1. 开启 slave_parallel_workers 并行复制；2. 设置 slave_parallel_type=LOGICAL_CLOCK；3. 拆分大事务；4. 监控 Seconds_Behind_Master。",
+        "actions": [{"id": "reproduce", "name": "模拟大事务"}, {"id": "monitor", "name": "监控延迟"}, {"id": "detect", "name": "检测配置"}],
     },
 ]
 

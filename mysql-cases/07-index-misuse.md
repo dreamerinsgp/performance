@@ -1,5 +1,40 @@
 # 案例 07：索引使用不当
 
+## 图示：场景 → 问题 → 解决方案
+
+```mermaid
+flowchart TB
+    subgraph 场景["业务场景"]
+        A[用户按手机号查订单] --> B["SELECT * FROM orders WHERE phone=?"]
+        B --> C[订单表 1000 万行]
+    end
+
+    subgraph 问题["问题"]
+        C --> D[phone 列无索引]
+        D --> E[MySQL 全表扫描]
+        E --> F[扫描约 1000 万行]
+        F --> G[单次 20~30 秒]
+        G --> H[接口超时 10 秒 → 加载失败]
+    end
+
+    subgraph 解决["解决方案"]
+        I["CREATE INDEX idx_phone ON orders(phone)"] --> J[查询走索引]
+        K[EXPLAIN 检查] --> L[type=ALL → 全表扫描]
+        K --> M[type=ref/range → 走索引]
+        N[覆盖索引] --> O[避免回表]
+    end
+
+    问题 --> 解决
+```
+
+```mermaid
+flowchart LR
+    A[无索引] --> B[全表扫描]
+    B --> C[极慢]
+    D[加索引] --> E[索引查找]
+    E --> F[毫秒级]
+```
+
 ## 业务需求场景
 
 **用户按手机号查订单导致接口超时**
