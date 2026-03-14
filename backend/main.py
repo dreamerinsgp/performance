@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, List, Optional
 
+import pymysql
 from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -436,6 +437,15 @@ def get_perftest_result():
 # --- MySQL Ops (mysql-ops-learning integration) ---
 MYSQL_OPS_DIR = PERF_DIR.parent / "mysql-ops-learning"
 MYSQL_CASES_DIR = PERF_DIR / "mysql-cases"
+MYSQL_OPS_PROBLEM_DIRS = {
+    "01-max-connections": "problems/conn",
+    "02-slow-log": "problems/slowlog",
+    "03-large-transaction": "problems/largetx",
+    "04-large-table": "problems/largetable",
+    "05-deadlock": "problems/deadlock",
+    "06-lock-wait-timeout": "problems/lockwait",
+    "07-index-misuse": "problems/indexmisuse",
+}
 
 
 def _build_mysql_dsn(config: dict) -> str:
@@ -567,6 +577,16 @@ class MysqlOpsRunRequest(BaseModel):
     action: str
 
 
+class MysqlOpsCodeSaveRequest(BaseModel):
+    path: str
+    content: str
+
+
+class MysqlOpsConnectionLimitRequest(BaseModel):
+    max_connections: int
+    max_user_connections: Optional[int] = None
+
+
 def _ssh_args_from_config(config: dict) -> List[str]:
     app_server = config.get("app_server", {})
     host = app_server.get("host", "").strip()
@@ -583,6 +603,50 @@ def _ssh_args_from_config(config: dict) -> List[str]:
         args.extend(["-p", str(port)])
     args.append(f"{user}@{host}")
     return args
+
+
+def _get_problem_dir(problem_id: str) -> str:
+    rel = MYSQL_OPS_PROBLEM_DIRS.get(problem_id)
+    if not rel:
+        raise HTTPException(status_code=400, detail=f"Unknown problem id: {problem_id}")
+    return rel
+
+
+async def _run_remote_bash(config: dict, script: str, timeout: int = 60) -> tuple[int, str, str]:
+    """Execute bash script on app server over SSH."""
+    remote_cmd = f"bash -lc {shlex.quote(script)}"
+    proc = await asyncio.create_subprocess_exec(
+        *_ssh_args_from_config(config),
+        remote_cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(status_code=500, detail=f"Remote command timeout ({timeout}s)")
+    return (
+        proc.returncode,
+        stdout.decode("utf-8", errors="replace"),
+        stderr.decode("utf-8", errors="replace"),
+    )
+
+
+def _mysql_connect_from_config(config: dict):
+    """Create direct MySQL connection using Infra config."""
+    m = config.get("mysql", {})
+    return pymysql.connect(
+        host=m.get("host", "127.0.0.1"),
+        port=int(m.get("port", 3306)),
+        user=m.get("user", "root"),
+        password=m.get("password", ""),
+        database=m.get("database", "jmeter_test"),
+        connect_timeout=8,
+        autocommit=True,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+    )
 
 
 async def _resolve_remote_mysql_ops_dir(config: dict) -> str:
@@ -690,6 +754,176 @@ async def run_mysql_ops(req: MysqlOpsRunRequest):
         raise HTTPException(status_code=500, detail="SSH command not found on dashboard host.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mysql-ops/connection-limits")
+def get_mysql_connection_limits():
+    """View current MySQL connection limits and usage."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config first.")
+    try:
+        conn = _mysql_connect_from_config(config)
+        with conn.cursor() as cur:
+            cur.execute("SHOW VARIABLES LIKE 'max_connections'")
+            row1 = cur.fetchone() or {}
+            cur.execute("SHOW VARIABLES LIKE 'max_user_connections'")
+            row2 = cur.fetchone() or {}
+            cur.execute("SHOW STATUS LIKE 'Threads_connected'")
+            row3 = cur.fetchone() or {}
+            cur.execute("SHOW STATUS LIKE 'Threads_running'")
+            row4 = cur.fetchone() or {}
+        conn.close()
+        return {
+            "max_connections": int(row1.get("Value", 0) or 0),
+            "max_user_connections": int(row2.get("Value", 0) or 0),
+            "threads_connected": int(row3.get("Value", 0) or 0),
+            "threads_running": int(row4.get("Value", 0) or 0),
+        }
+    except pymysql.MySQLError as e:
+        raise HTTPException(status_code=500, detail=f"MySQL error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mysql-ops/connection-limits")
+def set_mysql_connection_limits(req: MysqlOpsConnectionLimitRequest):
+    """Update MySQL max connections. Optionally update max_user_connections."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config first.")
+    if req.max_connections < 1:
+        raise HTTPException(status_code=400, detail="max_connections must be >= 1")
+    if req.max_user_connections is not None and req.max_user_connections < 0:
+        raise HTTPException(status_code=400, detail="max_user_connections must be >= 0 (0 means unlimited by user)")
+    try:
+        conn = _mysql_connect_from_config(config)
+        with conn.cursor() as cur:
+            cur.execute(f"SET GLOBAL max_connections = {int(req.max_connections)}")
+            if req.max_user_connections is not None:
+                cur.execute(f"SET GLOBAL max_user_connections = {int(req.max_user_connections)}")
+        conn.close()
+        return get_mysql_connection_limits()
+    except pymysql.MySQLError as e:
+        raise HTTPException(status_code=500, detail=f"MySQL error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mysql-ops/code/{problem_id}/files")
+async def list_mysql_ops_code_files(problem_id: str):
+    """List editable files for this problem on app server."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config first.")
+    remote_dir = await _resolve_remote_mysql_ops_dir(config)
+    problem_rel = _get_problem_dir(problem_id)
+    script = f"""
+set -e
+cd {shlex.quote(remote_dir)}
+python3 - <<'PY'
+import os, json
+repo = os.getcwd()
+problem_rel = {json.dumps(problem_rel)}
+root = os.path.normpath(os.path.join(repo, problem_rel))
+if not root.startswith(repo + os.sep) or not os.path.isdir(root):
+    print(json.dumps({{"files": [], "error": f"Problem directory not found: {{problem_rel}}"}}))
+    raise SystemExit(0)
+allow_ext = {{".go", ".md", ".sql", ".txt", ".yaml", ".yml"}}
+files = []
+for d, _, names in os.walk(root):
+    for n in names:
+        ext = os.path.splitext(n)[1].lower()
+        if ext in allow_ext:
+            rel = os.path.relpath(os.path.join(d, n), repo).replace("\\\\", "/")
+            files.append(rel)
+files.sort()
+print(json.dumps({{"files": files[:200]}}))
+PY
+"""
+    code, stdout, stderr = await _run_remote_bash(config, script, timeout=40)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"List files failed: {stderr.strip() or stdout.strip()}")
+    try:
+        data = json.loads(stdout.strip() or "{}")
+    except Exception:
+        raise HTTPException(status_code=500, detail=f"Unexpected list files output: {stdout[:300]}")
+    if data.get("error"):
+        raise HTTPException(status_code=404, detail=data["error"])
+    return data
+
+
+@app.get("/api/mysql-ops/code/{problem_id}")
+async def get_mysql_ops_code(problem_id: str, path: str = Query(...)):
+    """Read file content from problem directory on app server."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config first.")
+    remote_dir = await _resolve_remote_mysql_ops_dir(config)
+    problem_rel = _get_problem_dir(problem_id)
+    script = f"""
+set -e
+cd {shlex.quote(remote_dir)}
+python3 - <<'PY'
+import os, json, pathlib
+repo = os.getcwd()
+problem_rel = {json.dumps(problem_rel)}
+req_path = {json.dumps(path)}
+problem_root = os.path.normpath(os.path.join(repo, problem_rel))
+target = os.path.normpath(os.path.join(repo, req_path))
+if not target.startswith(problem_root + os.sep):
+    print(json.dumps({{"error": "Path is outside problem directory"}}))
+    raise SystemExit(0)
+if not os.path.isfile(target):
+    print(json.dumps({{"error": f"File not found: {{req_path}}"}}))
+    raise SystemExit(0)
+text = pathlib.Path(target).read_text(encoding="utf-8")
+print(json.dumps({{"path": req_path, "content": text}}))
+PY
+"""
+    code, stdout, stderr = await _run_remote_bash(config, script, timeout=40)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"Read file failed: {stderr.strip() or stdout.strip()}")
+    data = json.loads(stdout.strip() or "{}")
+    if data.get("error"):
+        raise HTTPException(status_code=400, detail=data["error"])
+    return data
+
+
+@app.post("/api/mysql-ops/code/{problem_id}")
+async def save_mysql_ops_code(problem_id: str, req: MysqlOpsCodeSaveRequest):
+    """Save file content back to app server under current problem directory."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config first.")
+    remote_dir = await _resolve_remote_mysql_ops_dir(config)
+    problem_rel = _get_problem_dir(problem_id)
+    script = f"""
+set -e
+cd {shlex.quote(remote_dir)}
+python3 - <<'PY'
+import os, json, pathlib
+repo = os.getcwd()
+problem_rel = {json.dumps(problem_rel)}
+req_path = {json.dumps(req.path)}
+content = {json.dumps(req.content)}
+problem_root = os.path.normpath(os.path.join(repo, problem_rel))
+target = os.path.normpath(os.path.join(repo, req_path))
+if not target.startswith(problem_root + os.sep):
+    print(json.dumps({{"error": "Path is outside problem directory"}}))
+    raise SystemExit(0)
+os.makedirs(os.path.dirname(target), exist_ok=True)
+pathlib.Path(target).write_text(content, encoding="utf-8")
+print(json.dumps({{"ok": True, "path": req_path}}))
+PY
+"""
+    code, stdout, stderr = await _run_remote_bash(config, script, timeout=60)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"Save file failed: {stderr.strip() or stdout.strip()}")
+    data = json.loads(stdout.strip() or "{}")
+    if data.get("error"):
+        raise HTTPException(status_code=400, detail=data["error"])
+    return data
 
 
 # Serve frontend last so /api routes take precedence

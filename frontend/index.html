@@ -162,6 +162,31 @@
         <h2 class="text-xl font-semibold mb-4">MySQL 运维学习</h2>
         <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 MySQL 运维问题，并通过工具模拟与验证。</p>
         <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="mysql-ops-status"></div>
+        <div class="mb-6 p-4 border rounded-lg bg-slate-50 border-slate-200">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-medium">最大连接数查看</h3>
+            <button id="btn-mysql-conn-refresh" class="px-3 py-2 bg-gray-100 text-gray-800 rounded text-sm hover:bg-gray-200">刷新</button>
+          </div>
+          <div id="mysql-conn-limit-status" class="text-xs text-gray-500 mb-3">点击刷新读取当前配置</div>
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+            <div class="border rounded bg-white px-3 py-2">
+              <div class="text-gray-500 text-xs">max_connections</div>
+              <div id="mysql-max-connections-value" class="font-medium">-</div>
+            </div>
+            <div class="border rounded bg-white px-3 py-2">
+              <div class="text-gray-500 text-xs">max_user_connections</div>
+              <div id="mysql-max-user-connections-value" class="font-medium">-</div>
+            </div>
+            <div class="border rounded bg-white px-3 py-2">
+              <div class="text-gray-500 text-xs">Threads_connected</div>
+              <div id="mysql-threads-connected-value" class="font-medium">-</div>
+            </div>
+            <div class="border rounded bg-white px-3 py-2">
+              <div class="text-gray-500 text-xs">Threads_running</div>
+              <div id="mysql-threads-running-value" class="font-medium">-</div>
+            </div>
+          </div>
+        </div>
         <h3 class="font-medium mb-3">问题列表（点击展开查看业务场景与详情）</h3>
         <div id="mysql-ops-cards" class="space-y-2">
           <!-- 静态兜底：JS 未加载或失败时仍显示列表 -->
@@ -205,6 +230,39 @@
               <button id="mysql-case-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
             </div>
             <pre id="mysql-case-modal-body" class="p-4 overflow-auto text-sm whitespace-pre-wrap flex-1 font-sans"></pre>
+            </div>
+          </div>
+        </div>
+        <div id="mysql-code-modal" class="fixed inset-0 z-50 hidden">
+          <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-2 md:p-4" id="mysql-code-modal-backdrop">
+            <div class="bg-white rounded-lg shadow-xl w-[98vw] max-w-none h-[94vh] overflow-hidden flex flex-col">
+              <div class="flex justify-between items-center p-4 border-b">
+                <h3 id="mysql-code-modal-title" class="font-semibold">问题代码</h3>
+                <button id="mysql-code-close" class="text-gray-500 hover:text-gray-700">✕</button>
+              </div>
+              <div class="p-3 md:p-4 border-b bg-gray-50 space-y-2">
+                <div class="flex flex-wrap gap-3 items-end">
+                  <div>
+                    <label class="block text-xs text-gray-600 mb-1">代码文件</label>
+                    <select id="mysql-code-file-select" class="border rounded px-3 py-2 text-sm min-w-[380px]"></select>
+                  </div>
+                  <button id="mysql-code-save-btn" class="px-3 py-2 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700">保存修改</button>
+                  <div>
+                    <label class="block text-xs text-gray-600 mb-1">重新运行动作</label>
+                    <select id="mysql-code-run-action" class="border rounded px-3 py-2 text-sm min-w-[220px]"></select>
+                  </div>
+                  <button id="mysql-code-run-btn" class="px-3 py-2 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700">保存并运行</button>
+                </div>
+                <p id="mysql-code-status" class="text-xs text-gray-500"></p>
+              </div>
+              <div class="px-3 md:px-4 py-2 border-b bg-amber-50">
+                <div class="flex items-center justify-between mb-1">
+                  <p class="text-xs font-medium text-amber-800">问题模块高亮预览</p>
+                  <button id="mysql-code-focus-first" class="px-2 py-1 text-xs bg-amber-100 text-amber-800 rounded hover:bg-amber-200">定位到第一处</button>
+                </div>
+                <pre id="mysql-code-highlight-preview" class="text-xs leading-5 whitespace-pre-wrap max-h-32 overflow-auto bg-white border rounded p-2"></pre>
+              </div>
+              <textarea id="mysql-code-editor" class="flex-1 w-full p-4 md:p-5 font-mono text-[14px] leading-6 border-0 outline-none resize-none"></textarea>
             </div>
           </div>
         </div>

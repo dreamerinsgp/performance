@@ -30,6 +30,11 @@ document.addEventListener('click', (e) => {
     e.stopPropagation();
     const link = e.target.closest('.mysql-case-link');
     if (typeof openMysqlCaseModal === 'function') openMysqlCaseModal(link.dataset.problem);
+  } else if (e.target.closest('.mysql-code-link')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = e.target.closest('.mysql-code-link');
+    if (typeof openMysqlCodeModal === 'function') openMysqlCodeModal(link.dataset.problem);
   }
 });
 
@@ -300,6 +305,91 @@ const MYSQL_OPS_PROBLEMS_FALLBACK = [
   { id: "06-lock-wait-timeout", name: "锁等待超时", business_scenario: "SaaS 平台运营导出全部用户报表：事务内 SELECT * FROM users 全表扫描且长时间不提交。前台用户尝试更新头像、昵称需要排他锁，等待超过 50 秒后返回 Lock wait timeout exceeded，用户看到「修改失败，请重试」。", scenario: "事务 A 持锁未提交，事务 B 等待同一行锁。", phenomenon: "报错 Lock wait timeout exceeded；更新/删除失败。", problem: "持锁事务长时间不提交，阻塞其他事务。", solution: "缩短持锁时间；调整 innodb_lock_wait_timeout；定位并 KILL 阻塞会话。", actions: [{ id: "reproduce", name: "模拟等待" }] },
   { id: "07-index-misuse", name: "索引使用不当", business_scenario: "外卖订单表 1000 万行，用户按手机号查订单。WHERE phone=? 无索引，MySQL 全表扫描，单次查询 20~30 秒，接口超时，用户看到「加载失败」，数据库 CPU 长期偏高。", scenario: "查询条件列无索引或索引未被使用。", phenomenon: "单条 SQL 执行很慢；EXPLAIN 显示 type=ALL。", problem: "未建索引或索引不符合查询，导致全表扫描。", solution: "对 WHERE/ORDER BY 列建索引；避免 SELECT *；通过 EXPLAIN 检查。", actions: [{ id: "reproduce", name: "模拟全表扫描" }, { id: "explain", name: "查看执行计划" }] },
 ];
+let MYSQL_OPS_LAST_PROBLEMS = MYSQL_OPS_PROBLEMS_FALLBACK;
+const MYSQL_CODE_MODAL_STATE = { problemId: '', filePath: '' };
+const MYSQL_CODE_HIGHLIGHT_STATE = { lines: [] };
+
+function escapeHtml(str) {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function getProblemHighlightRules(problemId) {
+  const rules = {
+    '01-max-connections': [
+      { keyword: /Opening connections until limit|connections open|Ping failed/i, reason: '连接耗尽压测/报错日志' },
+      { keyword: /sql\.Open\(|db\.Ping\(/, reason: '频繁建连/探活调用' },
+      { keyword: /append\(|holders|conns|for\s*\{/, reason: '连接持续累积循环' },
+    ],
+    '02-slow-log': [
+      { keyword: /slow_query_log|long_query_time|SLEEP\(/i, reason: '慢查询配置或模拟语句' },
+      { keyword: /SELECT .*FROM|ORDER BY|LIKE/i, reason: '潜在慢 SQL' },
+    ],
+    '03-large-transaction': [
+      { keyword: /BEGIN|START TRANSACTION|COMMIT|ROLLBACK/i, reason: '事务边界' },
+      { keyword: /UPDATE|INSERT|DELETE/i, reason: '大批量 DML 语句' },
+    ],
+    '04-large-table': [
+      { keyword: /ALTER TABLE|CREATE TABLE/i, reason: '大表 DDL 语句' },
+      { keyword: /COUNT\(\*\)|ANALYZE|INFORMATION_SCHEMA/i, reason: '大表分析语句' },
+    ],
+    '05-deadlock': [
+      { keyword: /FOR UPDATE|BEGIN|COMMIT/i, reason: '加锁事务逻辑' },
+      { keyword: /Deadlock|1213/i, reason: '死锁报错或检测' },
+    ],
+    '06-lock-wait-timeout': [
+      { keyword: /FOR UPDATE|UPDATE|LOCK|innodb_lock_wait_timeout/i, reason: '锁等待超时相关语句' },
+      { keyword: /Lock wait timeout|1205/i, reason: '超时报错处理' },
+    ],
+    '07-index-misuse': [
+      { keyword: /EXPLAIN|WHERE|ORDER BY|LIKE/i, reason: '索引使用关键 SQL' },
+      { keyword: /type=ALL|full scan|全表扫描/i, reason: '全表扫描风险点' },
+    ],
+  };
+  return rules[problemId] || [];
+}
+
+function computeHighlightLines(problemId, content) {
+  const lines = (content || '').split('\n');
+  const rules = getProblemHighlightRules(problemId);
+  const hits = [];
+  rules.forEach((r) => {
+    lines.forEach((line, idx) => {
+      if (r.keyword.test(line)) {
+        hits.push({ line: idx + 1, reason: r.reason, text: line });
+      }
+    });
+  });
+  const dedup = [];
+  const seen = new Set();
+  hits.forEach((h) => {
+    if (!seen.has(h.line)) {
+      seen.add(h.line);
+      dedup.push(h);
+    }
+  });
+  return dedup.slice(0, 16);
+}
+
+function renderHighlightPreview(problemId, content) {
+  const preview = $('mysql-code-highlight-preview');
+  if (!preview) return;
+  const lines = (content || '').split('\n');
+  const hits = computeHighlightLines(problemId, content);
+  MYSQL_CODE_HIGHLIGHT_STATE.lines = hits.map(h => h.line);
+  if (!hits.length) {
+    preview.innerHTML = '<span class="text-gray-500">未自动识别到明显问题行，可手动查看关键 SQL/事务/连接处理代码。</span>';
+    return;
+  }
+  const body = hits.map((h) => {
+    const raw = lines[h.line - 1] || '';
+    const text = escapeHtml(raw);
+    return `<div><span class="text-amber-700 font-medium">L${h.line}</span> <mark class="bg-yellow-200 px-1 rounded">${text || '&nbsp;'}</mark> <span class="text-gray-500">(${escapeHtml(h.reason)})</span></div>`;
+  }).join('');
+  preview.innerHTML = body;
+}
 
 function renderMysqlOpsCards(problems) {
   const cardsEl = $('mysql-ops-cards');
@@ -346,6 +436,7 @@ function renderMysqlOpsCards(problems) {
                 <button class="mysql-ops-run-btn px-3 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 disabled:opacity-50" data-problem="${p.id}" data-action="${a.id}">Run: ${a.name}</button>
               `).join('')}
               <a href="#" class="mysql-case-link text-sky-600 hover:text-sky-800 text-sm ml-2" data-problem="${p.id}">查看完整案例</a>
+              <button class="mysql-code-link px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200" data-problem="${p.id}">查看/修改代码</button>
             </div>
           </div>
         </div>
@@ -386,6 +477,135 @@ async function openMysqlCaseModal(problemId) {
   document.addEventListener('keydown', onEsc);
 }
 
+function getMysqlProblemById(problemId) {
+  return (MYSQL_OPS_LAST_PROBLEMS || []).find(p => p.id === problemId)
+    || MYSQL_OPS_PROBLEMS_FALLBACK.find(p => p.id === problemId);
+}
+
+async function loadMysqlCodeFile(problemId, filePath) {
+  const editor = $('mysql-code-editor');
+  const status = $('mysql-code-status');
+  if (!editor || !status) return;
+  status.textContent = '加载文件中...';
+  const res = await fetch(API_BASE + '/api/mysql-ops/code/' + encodeURIComponent(problemId) + '?path=' + encodeURIComponent(filePath));
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || '加载失败');
+  editor.value = data.content || '';
+  MYSQL_CODE_MODAL_STATE.filePath = data.path || filePath;
+  renderHighlightPreview(problemId, editor.value);
+  status.textContent = '已加载：' + MYSQL_CODE_MODAL_STATE.filePath;
+}
+
+async function openMysqlCodeModal(problemId) {
+  const modal = $('mysql-code-modal');
+  const title = $('mysql-code-modal-title');
+  const fileSel = $('mysql-code-file-select');
+  const runSel = $('mysql-code-run-action');
+  const status = $('mysql-code-status');
+  const editor = $('mysql-code-editor');
+  if (!modal || !title || !fileSel || !runSel || !status || !editor) return;
+
+  MYSQL_CODE_MODAL_STATE.problemId = problemId;
+  MYSQL_CODE_MODAL_STATE.filePath = '';
+  const p = getMysqlProblemById(problemId);
+  title.textContent = `问题代码 - ${p ? p.name : problemId}`;
+  editor.value = '';
+  fileSel.innerHTML = '';
+  runSel.innerHTML = ((p && p.actions) || []).map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+
+  modal.classList.remove('hidden');
+  status.textContent = '正在获取文件列表...';
+  const res = await fetch(API_BASE + '/api/mysql-ops/code/' + encodeURIComponent(problemId) + '/files');
+  const data = await res.json();
+  if (!res.ok) {
+    status.textContent = '获取文件失败：' + (data.detail || 'unknown');
+    return;
+  }
+  const files = data.files || [];
+  if (!files.length) {
+    status.textContent = '当前问题目录下没有可编辑文件。';
+    return;
+  }
+  fileSel.innerHTML = files.map(f => `<option value="${f}">${f}</option>`).join('');
+  await loadMysqlCodeFile(problemId, files[0]);
+}
+
+async function saveMysqlCodeModal() {
+  const problemId = MYSQL_CODE_MODAL_STATE.problemId;
+  const fileSel = $('mysql-code-file-select');
+  const editor = $('mysql-code-editor');
+  const status = $('mysql-code-status');
+  if (!problemId || !fileSel || !editor || !status) return;
+  const path = fileSel.value;
+  status.textContent = '保存中...';
+  const res = await fetch(API_BASE + '/api/mysql-ops/code/' + encodeURIComponent(problemId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content: editor.value }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    status.textContent = '保存失败：' + (data.detail || 'unknown');
+    return;
+  }
+  renderHighlightPreview(problemId, editor.value);
+  status.textContent = '保存成功：' + (data.path || path);
+}
+
+function initMysqlCodeModal() {
+  const modal = $('mysql-code-modal');
+  const backdrop = $('mysql-code-modal-backdrop');
+  const closeBtn = $('mysql-code-close');
+  const fileSel = $('mysql-code-file-select');
+  const saveBtn = $('mysql-code-save-btn');
+  const runBtn = $('mysql-code-run-btn');
+  const runSel = $('mysql-code-run-action');
+  const focusBtn = $('mysql-code-focus-first');
+  const editor = $('mysql-code-editor');
+  if (!modal || !backdrop || !closeBtn || !fileSel || !saveBtn || !runBtn || !runSel || !focusBtn || !editor) return;
+  if (modal.dataset.bound === '1') return;
+  modal.dataset.bound = '1';
+
+  const closeModal = () => modal.classList.add('hidden');
+  closeBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+  });
+  fileSel.addEventListener('change', async () => {
+    if (!MYSQL_CODE_MODAL_STATE.problemId || !fileSel.value) return;
+    try {
+      await loadMysqlCodeFile(MYSQL_CODE_MODAL_STATE.problemId, fileSel.value);
+    } catch (e) {
+      const status = $('mysql-code-status');
+      if (status) status.textContent = '加载失败：' + e.message;
+    }
+  });
+  editor.addEventListener('input', () => {
+    renderHighlightPreview(MYSQL_CODE_MODAL_STATE.problemId, editor.value);
+  });
+  focusBtn.addEventListener('click', () => {
+    const first = MYSQL_CODE_HIGHLIGHT_STATE.lines[0];
+    if (!first) return;
+    const all = editor.value || '';
+    const arr = all.split('\n');
+    let start = 0;
+    for (let i = 0; i < Math.max(0, first - 1); i += 1) start += arr[i].length + 1;
+    const end = start + (arr[first - 1] || '').length;
+    editor.focus();
+    editor.setSelectionRange(start, end);
+    const approxLineHeight = 24;
+    editor.scrollTop = Math.max(0, (first - 3) * approxLineHeight);
+  });
+  saveBtn.addEventListener('click', saveMysqlCodeModal);
+  runBtn.addEventListener('click', async () => {
+    await saveMysqlCodeModal();
+    const action = runSel.value;
+    if (!MYSQL_CODE_MODAL_STATE.problemId || !action) return;
+    await runMysqlOps(MYSQL_CODE_MODAL_STATE.problemId, action, runBtn);
+  });
+}
+
 async function loadMysqlOpsStatus() {
   const statusEl = $('mysql-ops-status');
   const cardsEl = $('mysql-ops-cards');
@@ -403,7 +623,9 @@ async function loadMysqlOpsStatus() {
   } catch (e) {
     statusEl.innerHTML = '<span class="text-amber-700">API 加载失败，使用本地数据。' + e.message + '</span>';
   }
+  MYSQL_OPS_LAST_PROBLEMS = problems;
   renderMysqlOpsCards(problems);
+  loadMysqlConnectionLimits();
 }
 
 function updateMysqlOpsActions() {
@@ -469,6 +691,93 @@ async function copyMysqlOpsOutput() {
   }
 }
 
+async function loadMysqlConnectionLimits() {
+  const status = $('mysql-conn-limit-status');
+  const maxConnInput = $('mysql-max-connections-input');
+  const maxUserConnInput = $('mysql-max-user-connections-input');
+  const maxConnValue = $('mysql-max-connections-value');
+  const maxUserConnValue = $('mysql-max-user-connections-value');
+  const threadsConnectedValue = $('mysql-threads-connected-value');
+  const threadsRunningValue = $('mysql-threads-running-value');
+  if (!status) return;
+  status.textContent = '读取中...';
+  try {
+    const res = await fetch(API_BASE + '/api/mysql-ops/connection-limits');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '读取失败');
+    const mc = data.max_connections ?? '-';
+    const muc = data.max_user_connections ?? '-';
+    const tc = data.threads_connected ?? '-';
+    const tr = data.threads_running ?? '-';
+    if (maxConnValue) maxConnValue.textContent = mc;
+    if (maxUserConnValue) maxUserConnValue.textContent = muc;
+    if (threadsConnectedValue) threadsConnectedValue.textContent = tc;
+    if (threadsRunningValue) threadsRunningValue.textContent = tr;
+    if (maxConnInput) maxConnInput.value = data.max_connections ?? '';
+    if (maxUserConnInput) maxUserConnInput.value = data.max_user_connections ?? '';
+    status.innerHTML = `<span class="text-green-700">当前：max_connections=${mc}，max_user_connections=${muc}，Threads_connected=${tc}，Threads_running=${tr}</span>`;
+  } catch (e) {
+    status.innerHTML = `<span class="text-red-600">读取失败：${e.message}</span>`;
+    if (maxConnValue) maxConnValue.textContent = '-';
+    if (maxUserConnValue) maxUserConnValue.textContent = '-';
+    if (threadsConnectedValue) threadsConnectedValue.textContent = '-';
+    if (threadsRunningValue) threadsRunningValue.textContent = '-';
+  }
+}
+
+async function applyMysqlConnectionLimits() {
+  const status = $('mysql-conn-limit-status');
+  const maxConnInput = $('mysql-max-connections-input');
+  const maxUserConnInput = $('mysql-max-user-connections-input');
+  const btn = $('btn-mysql-conn-apply');
+  if (!status || !maxConnInput || !maxUserConnInput || !btn) return;
+  const maxConnections = parseInt(maxConnInput.value, 10);
+  const maxUserRaw = (maxUserConnInput.value || '').trim();
+  if (!Number.isFinite(maxConnections) || maxConnections < 1) {
+    status.innerHTML = '<span class="text-red-600">请输入合法的 max_connections（>=1）</span>';
+    return;
+  }
+  const payload = { max_connections: maxConnections };
+  if (maxUserRaw !== '') {
+    const v = parseInt(maxUserRaw, 10);
+    if (!Number.isFinite(v) || v < 0) {
+      status.innerHTML = '<span class="text-red-600">max_user_connections 必须 >= 0</span>';
+      return;
+    }
+    payload.max_user_connections = v;
+  }
+  btn.disabled = true;
+  status.textContent = '应用中...';
+  try {
+    const res = await fetch(API_BASE + '/api/mysql-ops/connection-limits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '修改失败');
+    maxConnInput.value = data.max_connections ?? '';
+    maxUserConnInput.value = data.max_user_connections ?? '';
+    status.innerHTML = `<span class="text-green-700">已更新：max_connections=${data.max_connections}，max_user_connections=${data.max_user_connections}（Threads_connected=${data.threads_connected}）</span>`;
+  } catch (e) {
+    status.innerHTML = `<span class="text-red-600">修改失败：${e.message}</span>`;
+  }
+  btn.disabled = false;
+}
+
+function initMysqlConnectionLimitControls() {
+  const refreshBtn = $('btn-mysql-conn-refresh');
+  const applyBtn = $('btn-mysql-conn-apply');
+  if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+    refreshBtn.dataset.bound = '1';
+    refreshBtn.addEventListener('click', loadMysqlConnectionLimits);
+  }
+  if (applyBtn && applyBtn.dataset.bound !== '1') {
+    applyBtn.dataset.bound = '1';
+    applyBtn.addEventListener('click', applyMysqlConnectionLimits);
+  }
+}
+
 function initMysqlOpsOutputCopy() {
   const btn = $('btn-mysql-ops-copy');
   if (!btn || btn.dataset.bound === '1') return;
@@ -480,6 +789,8 @@ function initMysqlOpsOutputCopy() {
 function initMysqlOpsCardsOnLoad() {
   const cardsEl = document.getElementById('mysql-ops-cards');
   const statusEl = document.getElementById('mysql-ops-status');
+  initMysqlCodeModal();
+  initMysqlConnectionLimitControls();
   if (cardsEl) renderMysqlOpsCards(MYSQL_OPS_PROBLEMS_FALLBACK);
   initMysqlOpsOutputCopy();
   if (statusEl && !statusEl.textContent) statusEl.innerHTML = '<span class="text-gray-600">点击问题标题展开查看业务场景与详情。切换到此 Tab 后将尝试加载服务端数据。</span>';
