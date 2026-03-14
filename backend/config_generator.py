@@ -17,6 +17,8 @@ def generate_perf_yaml(config: dict) -> dict:
     kafka_brokers = k.get("brokers", ["127.0.0.1:9092"])
     if isinstance(kafka_brokers, str):
         kafka_brokers = [b.strip() for b in kafka_brokers.split(",")]
+    kafka_username = k.get("username", "").strip()
+    kafka_password = k.get("password", "")
 
     files = {}
 
@@ -38,7 +40,9 @@ Redis:
 
 KqSolTrades:
   Brokers:
-""" + "\n".join(f"    - {b}" for b in kafka_brokers) + "\n"
+""" + "\n".join(f"    - {b}" for b in kafka_brokers) + (
+    "\n  Username: \"" + kafka_username.replace('"', '\\"') + "\"\n  Password: \"" + (kafka_password or "").replace('"', '\\"') + "\"\n" if kafka_username else "\n"
+)
 
     # Market
     files["market-perf.yaml"] = f"""# Auto-generated perf config for market
@@ -83,7 +87,9 @@ redis:
 
 KqSol:
   Brokers:
-""" + "\n".join(f"    - {b}" for b in kafka_brokers) + "\n"
+""" + "\n".join(f"    - {b}" for b in kafka_brokers) + (
+    "\n  Username: \"" + kafka_username.replace('"', '\\"') + "\"\n  Password: \"" + (kafka_password or "").replace('"', '\\"') + "\"\n" if kafka_username else "\n"
+)
 
     # Trade
     files["trade-perf.yaml"] = f"""# Auto-generated perf config for trade

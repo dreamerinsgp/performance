@@ -31,6 +31,7 @@
       <button id="tab-perftest" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="perftest">Perf Test</button>
       <button id="tab-mysqlops" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="mysqlops">MySQL Ops</button>
       <button id="tab-redisops" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="redisops">Redis Ops</button>
+      <button id="tab-kafkaops" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="kafkaops">Kafka Ops</button>
     </div>
 
     <!-- Tab: Config -->
@@ -59,7 +60,11 @@
             </div>
             <div class="border rounded p-3">
               <label class="block text-sm font-medium text-gray-700 mb-1">Kafka</label>
-              <input type="text" id="kafka-brokers" placeholder="IP:9092 或 多个逗号分隔" class="w-full border rounded px-3 py-2">
+              <input type="text" id="kafka-brokers" placeholder="VPC: host:9092 或 公网: host:9093，多个逗号分隔" class="w-full border rounded px-3 py-2">
+              <input type="text" id="kafka-username" placeholder="SASL 用户名（公网 9093 需填）" class="w-full border rounded px-3 py-2 mt-1">
+              <input type="password" id="kafka-password" placeholder="SASL 密码" class="w-full border rounded px-3 py-2 mt-1">
+              <button type="button" id="btn-validate-kafka" class="mt-2 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">测试 Kafka 连接</button>
+              <span id="kafka-test-result" class="ml-2 text-sm"></span>
             </div>
           </div>
           <h3 class="text-lg font-semibold mt-6">2. 项目服务器（项目将部署到此机器）</h3>
@@ -349,6 +354,67 @@
             <button id="btn-redis-ops-copy" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">复制输出</button>
           </div>
           <pre id="redis-ops-output" class="p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 font-mono whitespace-pre-wrap min-h-[80px] hidden"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Kafka Ops -->
+    <div id="panel-kafkaops" class="tab-panel hidden">
+      <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-xl font-semibold mb-4">Kafka 运维学习</h2>
+        <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 Kafka 运维问题。Infra Config 中配置 Kafka 后可用「测试 Kafka 连接」验证。</p>
+        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="kafka-ops-status"></div>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-medium">问题列表</h3>
+          <button id="btn-kafka-ops-refresh" class="px-3 py-2 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">刷新列表</button>
+        </div>
+        <div id="kafka-ops-cards" class="space-y-2"></div>
+        <div class="mt-6 border-t pt-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-medium">执行输出</h3>
+            <button id="btn-kafka-ops-copy" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">复制输出</button>
+          </div>
+          <pre id="kafka-ops-output" class="p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 font-mono whitespace-pre-wrap min-h-[80px] hidden"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Kafka Ops code modal -->
+    <div id="kafka-code-modal" class="fixed inset-0 z-50 hidden">
+      <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-2 md:p-4" id="kafka-code-modal-backdrop">
+        <div class="bg-white rounded-lg shadow-xl w-[98vw] max-w-none h-[94vh] overflow-hidden flex flex-col">
+          <div class="flex justify-between items-center p-4 border-b">
+            <h3 id="kafka-code-modal-title" class="font-semibold">问题代码</h3>
+            <button id="kafka-code-close" class="text-gray-500 hover:text-gray-700">✕</button>
+          </div>
+          <div class="p-3 md:p-4 border-b bg-gray-50 space-y-2">
+            <div class="flex flex-wrap gap-3 items-end">
+              <div>
+                <label class="block text-xs text-gray-600 mb-1">代码文件</label>
+                <select id="kafka-code-file-select" class="border rounded px-3 py-2 text-sm min-w-[380px]"></select>
+              </div>
+              <button id="kafka-code-save-btn" class="px-3 py-2 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700">保存修改</button>
+              <div>
+                <label class="block text-xs text-gray-600 mb-1">重新运行动作</label>
+                <select id="kafka-code-run-action" class="border rounded px-3 py-2 text-sm min-w-[220px]"></select>
+              </div>
+              <button id="kafka-code-run-btn" class="px-3 py-2 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700">保存并运行</button>
+            </div>
+            <p id="kafka-code-status" class="text-xs text-gray-500"></p>
+          </div>
+          <textarea id="kafka-code-editor" class="flex-1 w-full p-4 md:p-5 font-mono text-[14px] leading-6 border-0 outline-none resize-none"></textarea>
+        </div>
+      </div>
+    </div>
+    <!-- Kafka Ops case modal -->
+    <div id="kafka-case-modal" class="fixed inset-0 z-50 hidden">
+      <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-4" id="kafka-case-modal-backdrop">
+        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col">
+          <div class="flex justify-between items-center p-4 border-b">
+            <h3 id="kafka-case-modal-title" class="font-semibold">完整案例</h3>
+            <button id="kafka-case-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
+          </div>
+          <div id="kafka-case-modal-body" class="p-4 overflow-auto text-sm flex-1 mysql-case-content"></div>
         </div>
       </div>
     </div>

@@ -52,6 +52,8 @@ class MySQLConfig(BaseModel):
 
 class KafkaConfig(BaseModel):
     brokers: str = "127.0.0.1:9092"  # comma-separated
+    username: str = ""  # SASL username (e.g. Aliyun 公网 9093)
+    password: str = ""  # SASL password
 
 
 class AppServerConfig(BaseModel):
@@ -133,6 +135,25 @@ def validate_config():
     if not config:
         raise HTTPException(status_code=400, detail="No config saved. Save config first.")
     return validate_all(config)
+
+
+class ValidateKafkaRequest(BaseModel):
+    brokers: str = "127.0.0.1:9092"
+
+
+@app.post("/api/config/validate/kafka")
+def validate_kafka(req: ValidateKafkaRequest):
+    """Quick test Kafka connectivity (TCP) without saving config."""
+    try:
+        from .validate import check_kafka
+
+        brokers = [b.strip() for b in req.brokers.split(",") if b.strip()]
+        if not brokers:
+            return {"ok": False, "message": "No brokers configured"}
+        ok, msg = check_kafka(brokers)
+        return {"ok": ok, "message": msg}
+    except Exception as e:
+        return {"ok": False, "message": str(e)}
 
 
 @app.get("/api/config/generate")
@@ -448,6 +469,9 @@ MYSQL_OPS_JSON = PERF_DIR / "config" / "mysql_ops_problems.json"
 REDIS_OPS_JSON = PERF_DIR / "config" / "redis_ops_problems.json"
 REDIS_CASES_DIR = PERF_DIR / "redis-cases"
 REDIS_OPS_LOCAL = PERF_DIR.parent / "redis-ops-learning"  # sibling to performance
+KAFKA_OPS_JSON = PERF_DIR / "config" / "kafka_ops_problems.json"
+KAFKA_CASES_DIR = PERF_DIR / "kafka-cases"
+KAFKA_OPS_LOCAL = PERF_DIR.parent / "kafka-ops-learning"
 
 MYSQL_OPS_PROBLEM_DIRS = {
     "01-max-connections": "problems/conn",
@@ -1390,6 +1414,207 @@ def save_redis_ops_code(problem_id: str, req: RedisOpsCodeSaveRequest):
     """Save file content back to redis-ops-learning."""
     root_dir = _resolve_redis_ops_local_dir()
     problem_rel = _get_redis_problem_dir(problem_id)
+    problem_root = (root_dir / problem_rel).resolve()
+    target = (root_dir / req.path).resolve()
+    try:
+        target.relative_to(problem_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path is outside problem directory")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(req.content, encoding="utf-8")
+        return {"ok": True, "path": req.path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Kafka Ops ---
+
+
+def _get_kafka_problem_dir(problem_id: str) -> str:
+    """Return problem dir from kafka_ops_problems.json problem_dirs."""
+    if not KAFKA_OPS_JSON.exists():
+        raise HTTPException(status_code=404, detail=f"Problem not found: {problem_id}")
+    with open(KAFKA_OPS_JSON, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    dirs = data.get("problem_dirs", {})
+    if problem_id not in dirs:
+        raise HTTPException(status_code=404, detail=f"Problem not found: {problem_id}")
+    return dirs[problem_id]
+
+
+def _run_kafka_ops_via_go(problem: str, action: str, config: dict) -> Tuple[bool, str, str]:
+    """Run via kafka-ops-learning Go binary. Returns (ok, stdout, stderr)."""
+    if not KAFKA_OPS_LOCAL.exists() or not KAFKA_OPS_LOCAL.is_dir():
+        return False, "", ""
+    k = config.get("kafka", {})
+    brokers = k.get("brokers", "127.0.0.1:9092")
+    if isinstance(brokers, list):
+        brokers = ",".join(brokers)
+    env = {**os.environ, "KAFKA_BROKERS": brokers or "127.0.0.1:9092"}
+    if k.get("username"):
+        env["KAFKA_USERNAME"] = str(k.get("username", ""))
+    if k.get("password"):
+        env["KAFKA_PASSWORD"] = str(k.get("password", ""))
+    try:
+        proc = subprocess.run(
+            ["go", "run", "./cmd", "run", problem, action],
+            cwd=str(KAFKA_OPS_LOCAL),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return proc.returncode == 0, proc.stdout or "", proc.stderr or ""
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False, "", ""
+
+
+def _load_kafka_ops_from_json() -> list:
+    """Load Kafka ops problems from JSON."""
+    if not KAFKA_OPS_JSON.exists():
+        return []
+    try:
+        with open(KAFKA_OPS_JSON, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("problems", [])
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _load_kafka_case_business_scenario(problem_id: str) -> str:
+    """Load 业务需求场景 from kafka-cases/*.md if exists."""
+    case_file = KAFKA_CASES_DIR / f"{problem_id}.md"
+    if not case_file.exists():
+        return ""
+    text = case_file.read_text(encoding="utf-8")
+    if "## 业务需求场景" not in text:
+        return ""
+    start = text.index("## 业务需求场景") + len("## 业务需求场景")
+    end = text.find("\n## ", start)
+    if end == -1:
+        end = len(text)
+    block = text[start:end].strip()
+    block = block.replace("**", "").strip()
+    return " ".join(block.split())
+
+
+@app.get("/api/kafka-ops/problems")
+def list_kafka_ops_problems():
+    """List Kafka ops problems. Loads from JSON, enriches with business_scenario from case files."""
+    problems_raw = _load_kafka_ops_from_json()
+    config = get_infra_config() or {}
+    k = config.get("kafka", {})
+    brokers = k.get("brokers", "")
+    if isinstance(brokers, list):
+        brokers = ",".join(brokers) if brokers else ""
+    kafka_available = bool((brokers or "").strip())
+    problems = []
+    for p in problems_raw:
+        obj = dict(p)
+        scenario_from_file = _load_kafka_case_business_scenario(p["id"])
+        if scenario_from_file:
+            obj["business_scenario"] = scenario_from_file
+        problems.append(obj)
+    return {"problems": problems, "kafka_available": kafka_available}
+
+
+@app.get("/api/kafka-ops/case/{problem_id}")
+def get_kafka_ops_case(problem_id: str):
+    """Return markdown content for Kafka ops case. Read from local kafka-cases/."""
+    _get_kafka_problem_dir(problem_id)  # validate
+    case_path = KAFKA_CASES_DIR / f"{problem_id}.md"
+    if not case_path.exists():
+        raise HTTPException(status_code=404, detail=f"Case not found: {problem_id}")
+    try:
+        return {"content": case_path.read_text(encoding="utf-8")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class KafkaOpsRunRequest(BaseModel):
+    problem: str
+    action: str
+
+
+@app.post("/api/kafka-ops/run")
+def run_kafka_ops(req: KafkaOpsRunRequest):
+    """Run Kafka ops action via kafka-ops-learning."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config with Kafka first.")
+    go_ok, go_out, go_err = _run_kafka_ops_via_go(req.problem, req.action, config)
+    if not (KAFKA_OPS_LOCAL.exists() and KAFKA_OPS_LOCAL.is_dir()):
+        return {
+            "ok": False,
+            "stdout": "",
+            "stderr": "kafka-ops-learning 未找到。请将项目放在 performance 同级目录。",
+        }
+    out = (go_out or "") + ("\n" + go_err if go_err else "")
+    return {"ok": go_ok, "stdout": go_out, "stderr": go_err or ""}
+
+
+def _resolve_kafka_ops_local_dir() -> Path:
+    """Return kafka-ops-learning root if it exists."""
+    if not KAFKA_OPS_LOCAL.exists() or not KAFKA_OPS_LOCAL.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"kafka-ops-learning not found at {KAFKA_OPS_LOCAL}. Place it as sibling to performance/.",
+        )
+    return KAFKA_OPS_LOCAL
+
+
+@app.get("/api/kafka-ops/code/{problem_id}/files")
+def list_kafka_ops_code_files(problem_id: str):
+    """List editable files for this Kafka problem."""
+    root_dir = _resolve_kafka_ops_local_dir()
+    problem_rel = _get_kafka_problem_dir(problem_id)
+    root = (root_dir / problem_rel).resolve()
+    repo = root_dir.resolve()
+    if not root.is_dir() or not str(root).startswith(str(repo) + os.sep):
+        raise HTTPException(status_code=404, detail=f"Problem directory not found: {problem_rel}")
+    allow_ext = {".go", ".md", ".txt", ".yaml", ".yml"}
+    files = []
+    for d, _, names in os.walk(root):
+        for n in names:
+            ext = os.path.splitext(n)[1].lower()
+            if ext in allow_ext:
+                full = Path(d) / n
+                rel = str(full.relative_to(repo)).replace("\\", "/")
+                files.append(rel)
+    files.sort()
+    return {"files": files[:200]}
+
+
+@app.get("/api/kafka-ops/code/{problem_id}")
+def get_kafka_ops_code(problem_id: str, path: str = Query(...)):
+    """Read file content from kafka-ops-learning problem directory."""
+    root_dir = _resolve_kafka_ops_local_dir()
+    problem_rel = _get_kafka_problem_dir(problem_id)
+    problem_root = (root_dir / problem_rel).resolve()
+    target = (root_dir / path).resolve()
+    try:
+        target.relative_to(problem_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path is outside problem directory")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    try:
+        return {"path": path, "content": target.read_text(encoding="utf-8")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class KafkaOpsCodeSaveRequest(BaseModel):
+    path: str
+    content: str
+
+
+@app.post("/api/kafka-ops/code/{problem_id}")
+def save_kafka_ops_code(problem_id: str, req: KafkaOpsCodeSaveRequest):
+    """Save file content back to kafka-ops-learning."""
+    root_dir = _resolve_kafka_ops_local_dir()
+    problem_rel = _get_kafka_problem_dir(problem_id)
     problem_root = (root_dir / problem_rel).resolve()
     target = (root_dir / req.path).resolve()
     try:

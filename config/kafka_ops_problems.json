@@ -1,0 +1,67 @@
+{
+  "problem_dirs": {
+    "01-consumer-lag": "problems/consumerlag",
+    "02-rebalance": "problems/rebalance",
+    "03-connection-failure": "problems/connection",
+    "04-topic-missing": "problems/topicmissing",
+    "05-message-ordering": "problems/messageordering"
+  },
+  "problems": [
+    {
+      "id": "01-consumer-lag",
+      "name": "消费延迟",
+      "scenario": "交易系统 Kafka 消费组处理订单消息，某次大促期间生产者写入激增，Consumer Lag 从数百飙升到数百万，下游报表延迟数小时，业务方反馈数据不同步。",
+      "phenomenon": "Consumer Lag 持续增长；消费吞吐量远低于生产；下游系统数据滞后。",
+      "problem": "消费端处理速度跟不上生产速度；单分区顺序消费成为瓶颈；或消费逻辑阻塞（如调外部 API）。",
+      "solution": "1. 监控 Lag；2. 增加分区和消费者实例；3. 优化消费逻辑、批处理；4. 排查消费阻塞点。",
+      "actions": [
+        {"id": "info", "name": "查看 Lag"},
+        {"id": "describe", "name": "查看 Topic 与 Consumer Group"}
+      ]
+    },
+    {
+      "id": "02-rebalance",
+      "name": "分区重平衡",
+      "scenario": "微服务扩容从 3 实例扩到 10 实例，Kafka Consumer 触发 rebalance，期间所有消费者暂停消费约 30 秒，消息积压，接口短暂超时。",
+      "phenomenon": "Rebalance 期间消费暂停；Lag 短暂上升；应用日志出现 \"Revoking partition\"。",
+      "problem": "消费者数量变化、session.timeout 等触发 rebalance，所有分区需重新分配，期间消费停滞。",
+      "solution": "1. 合理设置 session.timeout、max.poll.interval；2. 避免频繁扩缩容；3. 采用 Sticky 分配策略减少 rebalance 范围。",
+      "actions": [
+        {"id": "info", "name": "查看 Group 状态"}
+      ]
+    },
+    {
+      "id": "03-connection-failure",
+      "name": "连接失败",
+      "scenario": "使用阿里云 Kafka 公网接入（9093 SASL_SSL），应用启动时报 Connection refused 或 SASL authentication failed，无法连接 Broker。",
+      "phenomenon": "连接超时或拒绝；SASL/SSL 认证失败；应用无法消费或生产。",
+      "problem": "网络不通（安全组、VPC）；SASL 用户名密码错误；SSL 证书或协议不匹配。",
+      "solution": "1. 确认 VPC/公网端口、安全组放行；2. 校验 SASL 用户名密码；3. 公网 9093 需 SASL_SSL，VPC 9092 通常 PLAINTEXT。",
+      "actions": [
+        {"id": "test", "name": "测试连接"}
+      ]
+    },
+    {
+      "id": "04-topic-missing",
+      "name": "Topic 不存在",
+      "scenario": "新服务启动时向 Topic `order-events` 生产消息，报错 UnknownTopicOrPartitionException，Topic 未预先创建。",
+      "phenomenon": "生产/消费报 UnknownTopicOrPartitionException；自动创建未开启时 Topic 需手动创建。",
+      "problem": "Kafka 默认 auto.create.topics.enable 可能关闭；生产前需确保 Topic 存在。",
+      "solution": "1. 预创建 Topic 或开启自动创建；2. 使用 Admin API 检查 Topic 列表；3. 配置分区数、副本数。",
+      "actions": [
+        {"id": "list", "name": "列出 Topic"}
+      ]
+    },
+    {
+      "id": "05-message-ordering",
+      "name": "消息顺序",
+      "scenario": "订单状态变更需严格顺序（创建→支付→完成），多分区下同一订单的不同状态可能被不同分区承载，消费时乱序。",
+      "phenomenon": "下游收到乱序消息；业务逻辑异常（如先完成再支付）。",
+      "problem": "多分区并行消费无法保证全局顺序；同一 key 应发往同一分区。",
+      "solution": "1. 使用消息 key 确保同一业务实体进同一分区；2. 单分区可保证顺序但牺牲吞吐；3. 分区间用业务幂等和状态机处理。",
+      "actions": [
+        {"id": "info", "name": "理解分区与 key"}
+      ]
+    }
+  ]
+}

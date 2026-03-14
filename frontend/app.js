@@ -72,6 +72,40 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Kafka Ops 事件委托
+document.addEventListener('click', (e) => {
+  const cards = document.getElementById('kafka-ops-cards');
+  if (!cards || !cards.contains(e.target)) return;
+  if (e.target.closest('.kafka-ops-toggle')) {
+    const btn = e.target.closest('.kafka-ops-toggle');
+    const card = btn.closest('.border.rounded-lg');
+    if (card) {
+      const body = card.querySelector('.kafka-ops-body');
+      const chevron = card.querySelector('.kafka-ops-chevron');
+      if (body && chevron) {
+        const isOpen = !body.classList.contains('hidden');
+        body.classList.toggle('hidden', isOpen);
+        chevron.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+      }
+    }
+  } else if (e.target.closest('.kafka-case-link')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = e.target.closest('.kafka-case-link');
+    if (typeof openKafkaCaseModal === 'function') openKafkaCaseModal(link.dataset.problem);
+  } else if (e.target.closest('.kafka-ops-run-btn')) {
+    const btn = e.target.closest('.kafka-ops-run-btn');
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof runKafkaOps === 'function') runKafkaOps(btn.dataset.problem, btn.dataset.action, btn);
+  } else if (e.target.closest('.kafka-code-link')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = e.target.closest('.kafka-code-link');
+    if (typeof openKafkaCodeModal === 'function') openKafkaCodeModal(link.dataset.problem);
+  }
+});
+
 // Tab switching
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -97,6 +131,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       updateMysqlOpsActions();
     } else if (btn.dataset.tab === 'redisops') {
       loadRedisOpsStatus();
+    } else if (btn.dataset.tab === 'kafkaops') {
+      loadKafkaOpsStatus();
     } else {
       clearInterval(metricsRefreshInterval);
       metricsRefreshInterval = null;
@@ -121,6 +157,8 @@ async function loadConfig() {
     $('mysql-database').value = c.mysql?.database || 'jmeter_test';
     $('mysql-init-sql').value = c.mysql_init_sql || '';
     $('kafka-brokers').value = Array.isArray(c.kafka?.brokers) ? c.kafka.brokers.join(', ') : (c.kafka?.brokers || '');
+    $('kafka-username').value = c.kafka?.username || '';
+    $('kafka-password').value = c.kafka?.password || '';
     $('github-repo').value = c.github?.repo_url || '';
     $('github-branch').value = c.github?.branch || 'main';
     $('github-subpath').value = c.github?.subpath || '';
@@ -154,7 +192,11 @@ $('config-form').addEventListener('submit', async (e) => {
     redis: { host: $('redis-host').value || '127.0.0.1', port: parseInt($('redis-port').value) || 6379, username: ($('redis-username').value || '').trim(), password: $('redis-password').value },
     mysql: { host: $('mysql-host').value || '127.0.0.1', port: parseInt($('mysql-port').value) || 3306, user: $('mysql-user').value, password: $('mysql-password').value, database: $('mysql-database').value },
     mysql_init_sql: $('mysql-init-sql').value?.trim() || '',
-    kafka: { brokers: $('kafka-brokers').value || '127.0.0.1:9092' },
+    kafka: {
+      brokers: $('kafka-brokers').value || '127.0.0.1:9092',
+      username: ($('kafka-username').value || '').trim(),
+      password: $('kafka-password').value || '',
+    },
     app_server: {
       host: $('app-server-host').value,
       ssh_port: parseInt($('app-server-ssh-port').value) || 22,
@@ -172,6 +214,38 @@ $('config-form').addEventListener('submit', async (e) => {
   const res = await fetch(API_BASE + '/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (res.ok) alert('Config saved.');
   else alert('Failed: ' + (await res.text()));
+});
+
+// Validate Kafka (quick test without saving)
+$('btn-validate-kafka')?.addEventListener('click', async () => {
+  const el = $('kafka-test-result');
+  if (!el) return;
+  const brokers = ($('kafka-brokers').value || '').trim();
+  if (!brokers) {
+    el.textContent = '请先填写 Brokers';
+    el.className = 'ml-2 text-sm text-amber-600';
+    return;
+  }
+  el.textContent = '测试中...';
+  el.className = 'ml-2 text-sm text-gray-500';
+  try {
+    const res = await fetch(API_BASE + '/api/config/validate/kafka', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brokers }),
+    });
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      data = { ok: false, message: (await res.text()) || 'Server error' };
+    }
+    el.textContent = data.ok ? '✓ ' + data.message : '✗ ' + data.message;
+    el.className = 'ml-2 text-sm ' + (data.ok ? 'text-green-600' : 'text-red-600');
+  } catch (e) {
+    el.textContent = 'Error: ' + e.message;
+    el.className = 'ml-2 text-sm text-red-600';
+  }
 });
 
 // Validate
@@ -1061,6 +1135,238 @@ function renderRedisOpsCards(problems) {
   }
 }
 
+// ========== Kafka Ops ==========
+let KAFKA_OPS_LAST_PROBLEMS = [];
+
+function renderKafkaOpsCards(problems) {
+  const cardsEl = $('kafka-ops-cards');
+  if (!cardsEl) return;
+  const list = (problems && problems.length) ? problems : (KAFKA_OPS_LAST_PROBLEMS || []);
+  const esc = (s) => (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  cardsEl.innerHTML = list.map((p, i) => {
+    const expanded = i === 0;
+    return `
+      <div class="border rounded-lg bg-white border-l-4 border-emerald-600 shadow-sm overflow-hidden">
+        <button type="button" class="kafka-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-emerald-50 transition-colors" data-idx="${i}">
+          <span class="font-semibold text-emerald-700">${String(i + 1).padStart(2, '0')} ${p.name}</span>
+          <span class="kafka-ops-chevron text-gray-400 text-sm transform transition-transform" style="transform: rotate(${expanded ? 180 : 0}deg)">▼</span>
+        </button>
+        <div class="kafka-ops-body border-t border-gray-100 ${expanded ? '' : 'hidden'}">
+          <div class="p-4 space-y-4">
+            ${(p.business_scenario || p.businessScenario) ? `
+            <div class="p-3 bg-sky-50 border-l-4 border-sky-400 rounded text-sm text-gray-700">
+              <span class="font-medium text-sky-800 block mb-1">真实业务场景</span>
+              <p>${esc(p.business_scenario || p.businessScenario)}</p>
+            </div>
+            ` : ''}
+            <div class="space-y-3 text-sm">
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-xs font-medium">1</span>
+                <div><span class="font-medium text-gray-700">业务场景：</span><span class="text-gray-600">${esc(p.scenario)}</span></div>
+              </div>
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium">2</span>
+                <div><span class="font-medium text-gray-700">现象：</span><span class="text-gray-600">${esc(p.phenomenon)}</span></div>
+              </div>
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs font-medium">3</span>
+                <div><span class="font-medium text-gray-700">问题：</span><span class="text-gray-600">${esc(p.problem)}</span></div>
+              </div>
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-green-100 text-green-800 text-xs font-medium">4</span>
+                <div><span class="font-medium text-gray-700">解决方案：</span><span class="text-gray-600">${esc(p.solution)}</span></div>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 pt-2 border-t items-center">
+              ${(p.actions || []).map(a => `
+                <button class="kafka-ops-run-btn px-3 py-1.5 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700 disabled:opacity-50" data-problem="${p.id}" data-action="${a.id}">Run: ${a.name}</button>
+              `).join('')}
+              <a href="#" class="kafka-case-link text-sky-600 hover:text-sky-800 text-sm" data-problem="${p.id}">查看完整案例</a>
+              <button class="kafka-code-link px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200" data-problem="${p.id}">查看/修改代码</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  if (!list.length) {
+    cardsEl.innerHTML = '<p class="text-gray-500 text-sm py-4">暂无问题列表，请点击刷新。</p>';
+  }
+}
+
+async function loadKafkaOpsStatus() {
+  const statusEl = $('kafka-ops-status');
+  const cardsEl = $('kafka-ops-cards');
+  if (!statusEl || !cardsEl) return;
+  try {
+    const res = await fetch(API_BASE + '/api/kafka-ops/problems');
+    const data = await res.json();
+    const problems = data.problems || [];
+    KAFKA_OPS_LAST_PROBLEMS = problems;
+    renderKafkaOpsCards(problems);
+    if (data.kafka_available) {
+      statusEl.innerHTML = '<span class="text-green-700">✓ Kafka 已配置。可在 Infra Config 中点击「测试 Kafka 连接」验证。</span>';
+    } else {
+      statusEl.innerHTML = '<span class="text-amber-700">⚠ 请先在 Infra Config 中配置 Kafka Brokers。</span>';
+    }
+  } catch (e) {
+    statusEl.innerHTML = '<span class="text-amber-700">加载失败：' + (e.message || e) + '</span>';
+    renderKafkaOpsCards([]);
+  }
+}
+
+async function openKafkaCaseModal(problemId) {
+  const modal = document.getElementById('kafka-case-modal');
+  const titleEl = document.getElementById('kafka-case-modal-title');
+  const bodyEl = document.getElementById('kafka-case-modal-body');
+  const closeBtn = document.getElementById('kafka-case-modal-close');
+  const backdrop = document.getElementById('kafka-case-modal-backdrop');
+  if (!modal || !titleEl || !bodyEl) return;
+  titleEl.textContent = '加载中...';
+  bodyEl.innerHTML = '';
+  modal.classList.remove('hidden');
+  try {
+    const res = await fetch(API_BASE + '/api/kafka-ops/case/' + encodeURIComponent(problemId));
+    const data = await res.json();
+    titleEl.textContent = '完整业务案例 - ' + problemId;
+    const html = renderRedisCaseContent(data.content || '无内容');
+    bodyEl.innerHTML = html;
+    if (typeof mermaid !== 'undefined') {
+      const mermaidNodes = bodyEl.querySelectorAll('.mermaid');
+      if (mermaidNodes.length) {
+        try {
+          mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+          await new Promise(r => requestAnimationFrame(r));
+          await mermaid.run({ nodes: mermaidNodes, suppressErrors: true });
+        } catch (err) {
+          console.warn('Mermaid render:', err);
+          mermaidNodes.forEach(n => { n.innerHTML = '<pre class="text-xs text-amber-600">' + n.textContent + '</pre>'; });
+        }
+      }
+    }
+  } catch (e) {
+    titleEl.textContent = '加载失败';
+    bodyEl.innerHTML = '<p class="text-red-600">Error: ' + (e.message || e) + '</p>';
+  }
+  function closeModal() {
+    modal.classList.add('hidden');
+    document.removeEventListener('keydown', onEsc);
+  }
+  function onEsc(e) {
+    if (e.key === 'Escape') closeModal();
+  }
+  closeBtn.onclick = closeModal;
+  backdrop.onclick = (e) => { if (e.target === backdrop) closeModal(); };
+  document.addEventListener('keydown', onEsc);
+}
+
+async function runKafkaOps(problem, action, btn) {
+  const out = $('kafka-ops-output');
+  if (!out) return;
+  if (btn) btn.disabled = true;
+  out.classList.remove('hidden');
+  out.textContent = 'Running...';
+  try {
+    const res = await fetch(API_BASE + '/api/kafka-ops/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ problem, action }),
+    });
+    const data = await res.json();
+    out.textContent = (data.stdout || '') + (data.stderr ? '\n' + data.stderr : '');
+    if (data.ok) out.classList.add('text-green-400'); else out.classList.add('text-red-400');
+  } catch (e) {
+    out.textContent = 'Error: ' + e.message;
+    out.classList.add('text-red-400');
+  }
+  if (btn) btn.disabled = false;
+}
+
+const KAFKA_CODE_MODAL_STATE = { problemId: '', filePath: '' };
+
+async function loadKafkaCodeFile(problemId, filePath) {
+  const editor = $('kafka-code-editor');
+  const status = $('kafka-code-status');
+  if (!editor || !status) return;
+  status.textContent = '加载文件中...';
+  const res = await fetch(API_BASE + '/api/kafka-ops/code/' + encodeURIComponent(problemId) + '?path=' + encodeURIComponent(filePath));
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || '加载失败');
+  editor.value = data.content || '';
+  KAFKA_CODE_MODAL_STATE.filePath = data.path || filePath;
+  status.textContent = '已加载：' + KAFKA_CODE_MODAL_STATE.filePath;
+}
+
+async function openKafkaCodeModal(problemId) {
+  const modal = $('kafka-code-modal');
+  const title = $('kafka-code-modal-title');
+  const fileSel = $('kafka-code-file-select');
+  const runSel = $('kafka-code-run-action');
+  const status = $('kafka-code-status');
+  const editor = $('kafka-code-editor');
+  if (!modal || !title || !fileSel || !runSel || !status || !editor) return;
+
+  KAFKA_CODE_MODAL_STATE.problemId = problemId;
+  KAFKA_CODE_MODAL_STATE.filePath = '';
+  const p = (KAFKA_OPS_LAST_PROBLEMS || []).find(x => x.id === problemId);
+  title.textContent = '问题代码 - ' + (p ? p.name : problemId);
+
+  try {
+    const res = await fetch(API_BASE + '/api/kafka-ops/code/' + encodeURIComponent(problemId) + '/files');
+    const data = await res.json();
+    const files = data.files || [];
+    fileSel.innerHTML = files.map(f => `<option value="${f}">${f}</option>`).join('');
+    runSel.innerHTML = (p?.actions || []).map(a => `<option value="${a.id}">${a.name}</option>`).join('') || '<option value="">-</option>';
+    if (files.length > 0) {
+      await loadKafkaCodeFile(problemId, files[0]);
+    } else {
+      editor.value = '';
+      status.textContent = '当前问题目录下没有可编辑文件。请确保 kafka-ops-learning 存在于 performance 同级目录。';
+    }
+  } catch (e) {
+    status.textContent = '加载失败：' + (e.message || e);
+    editor.value = '';
+  }
+  modal.classList.remove('hidden');
+
+  fileSel.onchange = () => { if (fileSel.value) loadKafkaCodeFile(problemId, fileSel.value); };
+  $('kafka-code-save-btn').onclick = async () => {
+    if (!KAFKA_CODE_MODAL_STATE.filePath) return;
+    const res = await fetch(API_BASE + '/api/kafka-ops/code/' + encodeURIComponent(problemId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: KAFKA_CODE_MODAL_STATE.filePath, content: editor.value }),
+    });
+    const d = await res.json();
+    status.textContent = res.ok ? '已保存' : (d.detail || '保存失败');
+  };
+  $('kafka-code-run-btn').onclick = async () => {
+    if (!KAFKA_CODE_MODAL_STATE.filePath) return;
+    const saveRes = await fetch(API_BASE + '/api/kafka-ops/code/' + encodeURIComponent(problemId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: KAFKA_CODE_MODAL_STATE.filePath, content: editor.value }),
+    });
+    if (!saveRes.ok) { status.textContent = '保存失败'; return; }
+    const action = runSel.value;
+    if (!action) { status.textContent = '请选择运行动作'; return; }
+    const runRes = await fetch(API_BASE + '/api/kafka-ops/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ problem: problemId, action }),
+    });
+    const runData = await runRes.json();
+    const out = $('kafka-ops-output');
+    if (out) {
+      out.classList.remove('hidden');
+      out.textContent = (runData.stdout || '') + (runData.stderr ? '\n' + runData.stderr : '');
+    }
+    status.textContent = '已保存并运行';
+  };
+  $('kafka-code-close').onclick = () => modal.classList.add('hidden');
+  document.getElementById('kafka-code-modal-backdrop').onclick = (e) => { if (e.target.id === 'kafka-code-modal-backdrop') modal.classList.add('hidden'); };
+}
+
 async function loadRedisOpsStatus() {
   const statusEl = $('redis-ops-status');
   const cardsEl = $('redis-ops-cards');
@@ -1293,6 +1599,22 @@ function initRedisCodeModal() {
   });
 }
 
+function initKafkaOpsOnLoad() {
+  const refreshBtn = $('btn-kafka-ops-refresh');
+  if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+    refreshBtn.dataset.bound = '1';
+    refreshBtn.addEventListener('click', loadKafkaOpsStatus);
+  }
+  const copyBtn = $('btn-kafka-ops-copy');
+  if (copyBtn && copyBtn.dataset.bound !== '1') {
+    copyBtn.dataset.bound = '1';
+    copyBtn.addEventListener('click', () => {
+      const out = $('kafka-ops-output');
+      if (out && out.textContent) navigator.clipboard.writeText(out.textContent);
+    });
+  }
+}
+
 function initRedisOpsOnLoad() {
   const refreshBtn = $('btn-redis-ops-refresh');
   const copyBtn = $('btn-redis-ops-copy');
@@ -1416,8 +1738,10 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
     initMysqlOpsCardsOnLoad();
     initRedisOpsOnLoad();
+    initKafkaOpsOnLoad();
   });
 } else {
   initMysqlOpsCardsOnLoad();
   initRedisOpsOnLoad();
+  initKafkaOpsOnLoad();
 }
