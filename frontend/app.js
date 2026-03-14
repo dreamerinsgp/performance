@@ -437,11 +437,51 @@ async function runMysqlOps(problem, action, btn) {
   if (btn) btn.disabled = false;
 }
 
+async function copyMysqlOpsOutput() {
+  const out = $('mysql-ops-output');
+  const btn = $('btn-mysql-ops-copy');
+  if (!out || !btn) return;
+  const text = out.textContent || '';
+  if (!text.trim()) {
+    btn.textContent = '无可复制内容';
+    setTimeout(() => { btn.textContent = '复制输出'; }, 1200);
+    return;
+  }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = '复制输出'; }, 1200);
+  } catch (e) {
+    btn.textContent = '复制失败';
+    setTimeout(() => { btn.textContent = '复制输出'; }, 1200);
+  }
+}
+
+function initMysqlOpsOutputCopy() {
+  const btn = $('btn-mysql-ops-copy');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', copyMysqlOpsOutput);
+}
+
 // 页面加载时立即渲染问题列表，确保列表始终可见（不依赖 tab 切换或 API）
 function initMysqlOpsCardsOnLoad() {
   const cardsEl = document.getElementById('mysql-ops-cards');
   const statusEl = document.getElementById('mysql-ops-status');
   if (cardsEl) renderMysqlOpsCards(MYSQL_OPS_PROBLEMS_FALLBACK);
+  initMysqlOpsOutputCopy();
   if (statusEl && !statusEl.textContent) statusEl.innerHTML = '<span class="text-gray-600">点击问题标题展开查看业务场景与详情。切换到此 Tab 后将尝试加载服务端数据。</span>';
 }
 if (document.readyState === 'loading') {

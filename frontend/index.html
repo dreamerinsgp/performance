@@ -209,7 +209,10 @@
           </div>
         </div>
         <div class="mt-6 border-t pt-4">
-          <h3 class="font-medium mb-2">执行输出</h3>
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-medium">执行输出</h3>
+            <button id="btn-mysql-ops-copy" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">复制输出</button>
+          </div>
           <p class="text-xs text-gray-500 mb-1">点击上方 Run 按钮后，工具输出将显示于此。</p>
           <pre id="mysql-ops-output" class="p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 font-mono whitespace-pre-wrap min-h-[80px] hidden"></pre>
         </div>
