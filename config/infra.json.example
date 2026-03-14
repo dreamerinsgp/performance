@@ -28,5 +28,9 @@
     "repo_url": "https://github.com/your-org/dex_full",
     "branch": "main"
   },
-  "gateway_url": "http://127.0.0.1:8080"
+  "gateway_url": "http://127.0.0.1:8080",
+  "openclaw": {
+    "gateway_url": "http://127.0.0.1:18789",
+    "hooks_token": "与 ~/.openclaw/openclaw.json hooks.token 一致"
+  }
 }

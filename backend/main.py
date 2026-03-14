@@ -7,7 +7,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pymysql
 from fastapi import Body, FastAPI, Header, HTTPException, Query
@@ -39,6 +39,7 @@ class RedisConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 6379
     password: str = ""
+    username: str = ""  # Redis 6+ ACL，阿里云普通账号需填写，默认账号留空
 
 
 class MySQLConfig(BaseModel):
@@ -67,6 +68,11 @@ class GithubConfig(BaseModel):
     subpath: str = ""  # e.g. "dex_full" if project root is inside repo
 
 
+class OpenClawConfig(BaseModel):
+    gateway_url: str = "http://127.0.0.1:18789"
+    hooks_token: str = ""
+
+
 class InfraConfig(BaseModel):
     redis: RedisConfig = RedisConfig()
     mysql: MySQLConfig = MySQLConfig()
@@ -75,6 +81,7 @@ class InfraConfig(BaseModel):
     github: GithubConfig = GithubConfig()
     gateway_url: str = "http://127.0.0.1:8080"
     mysql_init_sql: str = ""  # 建表 SQL，Validate/Deploy 时自动执行
+    openclaw: Optional[OpenClawConfig] = None  # OpenClaw for MySQL Ops case generation
 
 
 class EndpointItem(BaseModel):
@@ -437,6 +444,11 @@ def get_perftest_result():
 # --- MySQL Ops (mysql-ops-learning integration) ---
 MYSQL_OPS_DIR = PERF_DIR.parent / "mysql-ops-learning"
 MYSQL_CASES_DIR = PERF_DIR / "mysql-cases"
+MYSQL_OPS_JSON = PERF_DIR / "config" / "mysql_ops_problems.json"
+REDIS_OPS_JSON = PERF_DIR / "config" / "redis_ops_problems.json"
+REDIS_CASES_DIR = PERF_DIR / "redis-cases"
+REDIS_OPS_LOCAL = PERF_DIR.parent / "redis-ops-learning"  # sibling to performance
+
 MYSQL_OPS_PROBLEM_DIRS = {
     "01-max-connections": "problems/conn",
     "02-slow-log": "problems/slowlog",
@@ -446,6 +458,7 @@ MYSQL_OPS_PROBLEM_DIRS = {
     "06-lock-wait-timeout": "problems/lockwait",
     "07-index-misuse": "problems/indexmisuse",
     "08-replication-lag": "problems/replicationlag",
+    "09-cpu-io-high": "problems/highcpu",
 }
 
 
@@ -533,7 +546,30 @@ MYSQL_OPS_PROBLEMS = [
         "solution": "1. 开启 slave_parallel_workers 并行复制；2. 设置 slave_parallel_type=LOGICAL_CLOCK；3. 拆分大事务；4. 监控 Seconds_Behind_Master。",
         "actions": [{"id": "reproduce", "name": "模拟大事务"}, {"id": "monitor", "name": "监控延迟"}, {"id": "detect", "name": "检测配置"}],
     },
+    {
+        "id": "09-cpu-io-high",
+        "name": "CPU/IO 飙高",
+        "scenario": "报表系统每日凌晨执行聚合查询，由于缺少复合索引导致全表扫描，CPU 和 I/O 负载激增。",
+        "phenomenon": "MySQL 服务器 CPU 使用率达 80%+；I/O 等待高；查询耗时从 1 秒飙升到 30+ 秒。",
+        "problem": "SQL 查询缺少合适的索引，执行全表扫描并触发 Filesort 排序，CPU 用于大量行数据的排序和聚合计算。",
+        "solution": "1. 添加复合索引: ALTER TABLE orders ADD INDEX idx_status_time (status, create_time); 2. 使用覆盖索引避免回表；3. 避免在索引列上使用函数。",
+        "actions": [{"id": "reproduce", "name": "模拟全表扫描"}, {"id": "explain", "name": "分析执行计划"}, {"id": "optimize", "name": "添加索引优化"}],
+    },
 ]
+
+
+def _load_mysql_ops_from_json() -> Tuple[List[dict], Dict[str, str]]:
+    """Load problems and problem_dirs from JSON. Returns (problems, problem_dirs). Uses in-code defaults if JSON missing/invalid."""
+    if not MYSQL_OPS_JSON.exists():
+        return MYSQL_OPS_PROBLEMS, MYSQL_OPS_PROBLEM_DIRS
+    try:
+        with open(MYSQL_OPS_JSON, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        problems = data.get("problems", MYSQL_OPS_PROBLEMS)
+        dirs = data.get("problem_dirs", MYSQL_OPS_PROBLEM_DIRS)
+        return (problems, dirs)
+    except (json.JSONDecodeError, IOError):
+        return MYSQL_OPS_PROBLEMS, MYSQL_OPS_PROBLEM_DIRS
 
 
 def _load_case_business_scenario(problem_id: str) -> str:
@@ -565,12 +601,13 @@ def get_mysql_ops_case(problem_id: str):
 
 @app.get("/api/mysql-ops/problems")
 def list_mysql_ops_problems():
-    """List available problems with scenario, phenomenon, problem, solution. Enriches with business scenario from mysql-cases/."""
+    """List available problems with scenario, phenomenon, problem, solution. Loads from JSON (dynamic, no restart needed)."""
     config = get_infra_config() or {}
     app_server = config.get("app_server", {})
     mysql_ops_available = bool(app_server.get("host", "").strip())
+    problems_list, _ = _load_mysql_ops_from_json()
     problems = []
-    for p in MYSQL_OPS_PROBLEMS:
+    for p in problems_list:
         obj = dict(p)
         scenario_from_file = _load_case_business_scenario(p["id"])
         if scenario_from_file:
@@ -580,6 +617,64 @@ def list_mysql_ops_problems():
         "problems": problems,
         "mysql_ops_available": mysql_ops_available,
     }
+
+
+class MysqlOpsGenerateRequest(BaseModel):
+    """Request for AI-generated MySQL ops case. Only problem is required; AI generates the rest."""
+    problem: str  # 问题名称，如「CPU/IO 飙高」「binlog 过大」
+
+
+@app.post("/api/mysql-ops/generate")
+def generate_mysql_ops_case(req: MysqlOpsGenerateRequest):
+    """Trigger OpenClaw agent to generate a new MySQL ops case from the given description."""
+    config = get_infra_config() or {}
+    openclaw = config.get("openclaw") or {}
+    base_url = (openclaw.get("gateway_url") or "http://127.0.0.1:18789").rstrip("/")
+    token = (openclaw.get("hooks_token") or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenClaw hooks token not configured. Add openclaw.gateway_url and openclaw.hooks_token in Infra Config.",
+        )
+    message = (
+        "请使用 mysql-ops-case-gen 技能，根据以下【问题】生成新的 MySQL 运维案例。\n\n"
+        f"问题：{req.problem}\n\n"
+        "要求：请你先根据该问题，自动生成【业务场景】【现象】【技术点】，再按 Skill 步骤生成完整案例。\n"
+        "步骤：1) 构思业务场景、现象、技术点 2) 创建 problems/<pkg>/ 3) 更新 cmd/main.go "
+        "4) 创建 performance/mysql-cases/<id>.md 5) 更新 performance/config/mysql_ops_problems.json "
+        "（read 该 JSON，在 problem_dirs 和 problems 中追加新条目后 write）6) 执行 go build 验证。"
+    )
+    import httpx
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            r = client.post(
+                f"{base_url}/hooks/agent",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "message": message,
+                    "name": "mysql-ops-case-gen",
+                    "sessionKey": f"hook:mysql-ops:{hash(req.problem) % 100000:05d}",
+                    "deliver": False,
+                    "timeoutSeconds": 180,
+                },
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to reach OpenClaw gateway: {e}",
+        )
+    if r.status_code == 401:
+        raise HTTPException(status_code=400, detail="OpenClaw hooks token invalid or expired.")
+    if r.status_code not in (200, 202):
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenClaw returned {r.status_code}: {r.text[:200]}",
+        )
+    body = r.json() if r.content else {}
+    return {"ok": True, "runId": body.get("runId"), "message": "Agent 已启动，稍后刷新页面查看新案例。"}
 
 
 class MysqlOpsRunRequest(BaseModel):
@@ -616,7 +711,8 @@ def _ssh_args_from_config(config: dict) -> List[str]:
 
 
 def _get_problem_dir(problem_id: str) -> str:
-    rel = MYSQL_OPS_PROBLEM_DIRS.get(problem_id)
+    _, problem_dirs = _load_mysql_ops_from_json()
+    rel = problem_dirs.get(problem_id)
     if not rel:
         raise HTTPException(status_code=400, detail=f"Unknown problem id: {problem_id}")
     return rel
@@ -934,6 +1030,378 @@ PY
     if data.get("error"):
         raise HTTPException(status_code=400, detail=data["error"])
     return data
+
+
+# --- Redis Ops ---
+REDIS_PROBLEM_DIRS_FALLBACK = {
+    "01-memory": "problems/memory",
+    "02-clients": "problems/clients",
+    "03-slowlog": "problems/slowlog",
+    "04-replication": "problems/replication",
+    "05-stats": "problems/stats",
+}
+
+
+def _load_redis_problem_dirs() -> dict:
+    """Load problem_dirs from JSON. Falls back to hardcoded map."""
+    if not REDIS_OPS_JSON.exists():
+        return dict(REDIS_PROBLEM_DIRS_FALLBACK)
+    try:
+        with open(REDIS_OPS_JSON, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        dirs = data.get("problem_dirs", {})
+        return {**REDIS_PROBLEM_DIRS_FALLBACK, **dirs} if dirs else REDIS_PROBLEM_DIRS_FALLBACK
+    except (json.JSONDecodeError, IOError):
+        return dict(REDIS_PROBLEM_DIRS_FALLBACK)
+
+
+def _get_redis_problem_dir(problem_id: str) -> str:
+    dirs = _load_redis_problem_dirs()
+    rel = dirs.get(problem_id)
+    if not rel:
+        raise HTTPException(status_code=400, detail=f"Unknown Redis problem id: {problem_id}")
+    return rel
+
+
+def _load_redis_ops_from_json() -> List[dict]:
+    """Load Redis ops problems from JSON."""
+    if not REDIS_OPS_JSON.exists():
+        return []
+    try:
+        with open(REDIS_OPS_JSON, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("problems", [])
+    except (json.JSONDecodeError, IOError):
+        return []
+
+
+def _redis_client_from_config(config: dict):
+    """Create Redis client from Infra config."""
+    import redis
+    r = config.get("redis", {})
+    host = r.get("host", "127.0.0.1")
+    port = int(r.get("port", 6379))
+    password = r.get("password", "") or None
+    username = r.get("username", "") or None
+    kwargs = {"host": host, "port": port, "socket_connect_timeout": 10}
+    if password:
+        kwargs["password"] = password
+    if username:
+        kwargs["username"] = username
+    return redis.Redis(**kwargs)
+
+
+def _run_redis_ops_command(problem: str, action: str, client) -> Tuple[bool, str]:
+    """Execute Redis command for given problem+action. Returns (ok, output)."""
+    output_lines = []
+    try:
+        if problem == "01-memory":
+            if action == "info":
+                info = client.info("memory")
+                for k, v in sorted(info.items()):
+                    output_lines.append(f"{k}: {v}")
+            elif action == "bigkeys":
+                cursor = 0
+                sampled = 0
+                max_samples = 50
+                while True:
+                    cursor, keys = client.scan(cursor, count=100)
+                    for k in keys[:10]:
+                        try:
+                            mem = client.memory_usage(k)
+                            if mem and mem > 1024:
+                                output_lines.append(f"{k.decode() if isinstance(k, bytes) else k}: {mem} bytes")
+                        except Exception:
+                            pass
+                        sampled += 1
+                        if sampled >= max_samples:
+                            break
+                    if cursor == 0 or sampled >= max_samples:
+                        break
+                if not output_lines:
+                    output_lines.append("(未发现明显大 key，或 MEMORY USAGE 不可用。可尝试 redis-cli --bigkeys)")
+        elif problem == "02-clients":
+            if action == "info":
+                info = client.info("clients")
+                for k, v in sorted(info.items()):
+                    output_lines.append(f"{k}: {v}")
+        elif problem == "03-slowlog":
+            if action == "info":
+                try:
+                    cfg = client.config_get("slowlog*")
+                    for k, v in sorted(cfg.items()):
+                        output_lines.append(f"{k}: {v}")
+                except Exception as ex:
+                    output_lines.append(f"(CONFIG 可能被禁用: {ex})")
+            elif action == "slowlog":
+                logs = client.slowlog_get(10)
+                for i, e in enumerate(logs):
+                    cmd = " ".join((x.decode() if isinstance(x, bytes) else str(x) for x in (e.get("command") or [])))
+                    output_lines.append(f"{i+1}. {e.get('duration', 0)}us - {cmd[:80]}...")
+                if not logs:
+                    output_lines.append("(无慢命令记录)")
+        elif problem == "04-replication":
+            if action == "info":
+                info = client.info("replication")
+                for k, v in sorted(info.items()):
+                    output_lines.append(f"{k}: {v}")
+        elif problem == "05-stats":
+            if action == "info":
+                for section in ["server", "clients", "memory", "stats"]:
+                    try:
+                        info = client.info(section)
+                        output_lines.append(f"# {section}")
+                        for k, v in sorted(info.items()):
+                            output_lines.append(f"{k}: {v}")
+                        output_lines.append("")
+                    except Exception:
+                        pass
+            elif action == "stats":
+                info = client.info("stats")
+                for k, v in sorted(info.items()):
+                    output_lines.append(f"{k}: {v}")
+        else:
+            return False, f"Unknown problem or action: {problem} / {action}"
+        return True, "\n".join(output_lines)
+    except Exception as e:
+        return False, str(e)
+
+
+def _load_redis_case_business_scenario(problem_id: str) -> str:
+    """Load 业务需求场景 from redis-cases/*.md if exists. Same logic as MySQL."""
+    case_file = REDIS_CASES_DIR / f"{problem_id}.md"
+    if not case_file.exists():
+        return ""
+    text = case_file.read_text(encoding="utf-8")
+    if "## 业务需求场景" not in text:
+        return ""
+    start = text.index("## 业务需求场景") + len("## 业务需求场景")
+    end = text.find("\n## ", start)
+    if end == -1:
+        end = len(text)
+    block = text[start:end].strip()
+    block = block.replace("**", "").strip()
+    return " ".join(block.split())
+
+
+@app.get("/api/redis-ops/problems")
+def list_redis_ops_problems():
+    """List Redis ops problems. Loads from JSON, enriches with business_scenario from case files."""
+    problems_raw = _load_redis_ops_from_json()
+    config = get_infra_config() or {}
+    r = config.get("redis", {})
+    redis_available = bool(r.get("host", "").strip())
+    problems = []
+    for p in problems_raw:
+        obj = dict(p)
+        scenario_from_file = _load_redis_case_business_scenario(p["id"])
+        if scenario_from_file:
+            obj["business_scenario"] = scenario_from_file
+        problems.append(obj)
+    return {"problems": problems, "redis_available": redis_available}
+
+
+class RedisOpsGenerateRequest(BaseModel):
+    """Request for AI-generated Redis ops case."""
+    problem: str  # 问题名称，如「内存碎片」「热 key」「哨兵切换」
+
+
+@app.post("/api/redis-ops/generate")
+def generate_redis_ops_case(req: RedisOpsGenerateRequest):
+    """Trigger OpenClaw agent to generate a new Redis ops case from the given description."""
+    config = get_infra_config() or {}
+    openclaw = config.get("openclaw") or {}
+    base_url = (openclaw.get("gateway_url") or "http://127.0.0.1:18789").rstrip("/")
+    token = (openclaw.get("hooks_token") or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenClaw hooks token not configured. Add openclaw.gateway_url and openclaw.hooks_token in Infra Config.",
+        )
+    message = (
+        "请使用 redis-ops-case-gen 技能，根据以下【问题】生成新的 Redis 运维案例。\n\n"
+        f"问题：{req.problem}\n\n"
+        "要求：请你先根据该问题，自动生成【业务场景】【现象】【技术点】，再按 Skill 步骤生成完整案例。\n"
+        "步骤：1) 构思业务场景、现象、技术点 2) 创建 problems/<pkg>/ 3) 更新 cmd/main.go "
+        "4) 创建 performance/redis-cases/<id>.md 5) 更新 performance/config/redis_ops_problems.json "
+        "（在 problem_dirs 和 problems 中追加新条目）6) 执行 go build 验证。"
+    )
+    import httpx
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            r = client.post(
+                f"{base_url}/hooks/agent",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "message": message,
+                    "name": "redis-ops-case-gen",
+                    "sessionKey": f"hook:redis-ops:{hash(req.problem) % 100000:05d}",
+                    "deliver": False,
+                    "timeoutSeconds": 180,
+                },
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to reach OpenClaw gateway: {e}",
+        )
+    if r.status_code == 401:
+        raise HTTPException(status_code=400, detail="OpenClaw hooks token invalid or expired.")
+    if r.status_code not in (200, 202):
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenClaw returned {r.status_code}: {r.text[:200]}",
+        )
+    body = r.json() if r.content else {}
+    return {"ok": True, "runId": body.get("runId"), "message": "Agent 已启动，稍后刷新页面查看新案例。"}
+
+
+class RedisOpsRunRequest(BaseModel):
+    problem: str
+    action: str
+
+
+def _run_redis_ops_via_go(problem: str, action: str, config: dict) -> Tuple[bool, str, str]:
+    """Run via redis-ops-learning Go binary when available. Returns (ok, stdout, stderr)."""
+    if not REDIS_OPS_LOCAL.exists() or not REDIS_OPS_LOCAL.is_dir():
+        return False, "", ""
+    r = config.get("redis", {})
+    host = r.get("host", "127.0.0.1")
+    port = int(r.get("port", 6379))
+    addr = f"{host}:{port}"
+    env = {**os.environ, "REDIS_ADDR": addr}
+    if r.get("password"):
+        env["REDIS_PASSWORD"] = str(r.get("password", ""))
+    if r.get("username"):
+        env["REDIS_USERNAME"] = str(r.get("username", ""))
+    try:
+        proc = subprocess.run(
+            ["go", "run", "./cmd", "run", problem, action],
+            cwd=str(REDIS_OPS_LOCAL),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        out = proc.stdout or ""
+        err = proc.stderr or ""
+        return proc.returncode == 0, out, err
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False, "", ""
+
+
+@app.post("/api/redis-ops/run")
+def run_redis_ops(req: RedisOpsRunRequest):
+    """Run Redis ops action (execute Redis commands via Infra config)."""
+    config = get_infra_config()
+    if not config:
+        raise HTTPException(status_code=400, detail="No config saved. Save Infra config with Redis first.")
+    try:
+        # Prefer Go binary when redis-ops-learning exists (supports 06+ and all problems)
+        go_ok, go_out, go_err = _run_redis_ops_via_go(req.problem, req.action, config)
+        if go_ok:
+            return {"ok": True, "stdout": go_out, "stderr": go_err or ""}
+        if go_out or go_err:
+            # Go ran but failed - return its output
+            return {"ok": False, "stdout": go_out, "stderr": go_err or ""}
+        # Go not installed or not runnable - fall back to Python for built-in problems (01-05)
+        client = _redis_client_from_config(config)
+        ok, output = _run_redis_ops_command(req.problem, req.action, client)
+        client.close()
+        return {"ok": ok, "stdout": output, "stderr": ""}
+    except Exception as e:
+        return {"ok": False, "stdout": "", "stderr": str(e)}
+
+
+@app.get("/api/redis-ops/case/{problem_id}")
+def get_redis_ops_case(problem_id: str):
+    """Return markdown content for Redis ops case. Read from local redis-cases/."""
+    _get_redis_problem_dir(problem_id)  # validate
+    case_path = REDIS_CASES_DIR / f"{problem_id}.md"
+    if not case_path.exists():
+        raise HTTPException(status_code=404, detail=f"Case not found: {problem_id}")
+    try:
+        return {"content": case_path.read_text(encoding="utf-8")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _resolve_redis_ops_local_dir() -> Path:
+    """Return redis-ops-learning root if it exists."""
+    if not REDIS_OPS_LOCAL.exists() or not REDIS_OPS_LOCAL.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"redis-ops-learning not found at {REDIS_OPS_LOCAL}. Place it as sibling to performance/.",
+        )
+    return REDIS_OPS_LOCAL
+
+
+@app.get("/api/redis-ops/code/{problem_id}/files")
+def list_redis_ops_code_files(problem_id: str):
+    """List editable files for this Redis problem. Uses local redis-ops-learning."""
+    root_dir = _resolve_redis_ops_local_dir()
+    problem_rel = _get_redis_problem_dir(problem_id)
+    root = (root_dir / problem_rel).resolve()
+    repo = root_dir.resolve()
+    if not root.is_dir() or not str(root).startswith(str(repo) + os.sep):
+        raise HTTPException(status_code=404, detail=f"Problem directory not found: {problem_rel}")
+    allow_ext = {".go", ".md", ".txt", ".yaml", ".yml"}
+    files = []
+    for d, _, names in os.walk(root):
+        for n in names:
+            ext = os.path.splitext(n)[1].lower()
+            if ext in allow_ext:
+                full = Path(d) / n
+                rel = str(full.relative_to(repo)).replace("\\", "/")
+                files.append(rel)
+    files.sort()
+    return {"files": files[:200]}
+
+
+@app.get("/api/redis-ops/code/{problem_id}")
+def get_redis_ops_code(problem_id: str, path: str = Query(...)):
+    """Read file content from redis-ops-learning problem directory."""
+    root_dir = _resolve_redis_ops_local_dir()
+    problem_rel = _get_redis_problem_dir(problem_id)
+    problem_root = (root_dir / problem_rel).resolve()
+    target = (root_dir / path).resolve()
+    try:
+        target.relative_to(problem_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path is outside problem directory")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    try:
+        return {"path": path, "content": target.read_text(encoding="utf-8")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RedisOpsCodeSaveRequest(BaseModel):
+    path: str
+    content: str
+
+
+@app.post("/api/redis-ops/code/{problem_id}")
+def save_redis_ops_code(problem_id: str, req: RedisOpsCodeSaveRequest):
+    """Save file content back to redis-ops-learning."""
+    root_dir = _resolve_redis_ops_local_dir()
+    problem_rel = _get_redis_problem_dir(problem_id)
+    problem_root = (root_dir / problem_rel).resolve()
+    target = (root_dir / req.path).resolve()
+    try:
+        target.relative_to(problem_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path is outside problem directory")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(req.content, encoding="utf-8")
+        return {"ok": True, "path": req.path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Serve frontend last so /api routes take precedence

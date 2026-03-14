@@ -1,0 +1,106 @@
+{
+  "problem_dirs": {
+    "01-max-connections": "problems/conn",
+    "02-slow-log": "problems/slowlog",
+    "03-large-transaction": "problems/largetx",
+    "04-large-table": "problems/largetable",
+    "05-deadlock": "problems/deadlock",
+    "06-lock-wait-timeout": "problems/lockwait",
+    "07-index-misuse": "problems/indexmisuse",
+    "08-replication-lag": "problems/replicationlag",
+    "09-cpu-io-high": "problems/highcpu",
+    "10-failover": "problems/failover"
+  },
+  "problems": [
+    {
+      "id": "01-max-connections",
+      "name": "最大连接数耗尽",
+      "scenario": "应用未正确复用连接，不断创建新连接而不释放。连接池配置不当或存在连接泄漏。",
+      "phenomenon": "新连接报错 Too many connections；应用无法访问数据库；Threads_connected 接近 max_connections。",
+      "problem": "MySQL 连接数达到上限，无法接受新连接。通常由连接泄漏、连接池过小或并发突增导致。",
+      "solution": "1. 调整 max_connections（若确实需要更多连接）；2. 应用层使用连接池，避免每请求一连接；3. 排查并修复未关闭连接；4. 调整 wait_timeout 缩短空闲连接占用。",
+      "actions": [{"id": "reproduce", "name": "模拟耗尽"}, {"id": "monitor", "name": "查看状态"}]
+    },
+    {
+      "id": "02-slow-log",
+      "name": "慢查询监控",
+      "scenario": "线上偶发接口变慢，但不知道是哪些 SQL 导致。需要开启慢查询日志定位问题语句。",
+      "phenomenon": "接口响应时间不稳定；数据库负载波动；用户反馈卡顿。",
+      "problem": "部分 SQL 执行时间过长，但未开启慢日志或未设置合适阈值，无法定位具体慢查询。",
+      "solution": "1. 开启 slow_query_log；2. 设置 long_query_time（如 2 秒）；3. 使用 pt-query-digest 或 MySQL 工具分析慢日志；4. 针对慢查询加索引或改写。",
+      "actions": [{"id": "reproduce", "name": "模拟慢查询"}, {"id": "enable", "name": "开启慢日志"}, {"id": "view", "name": "查看慢日志"}]
+    },
+    {
+      "id": "03-large-transaction",
+      "name": "大事务",
+      "scenario": "批量更新/插入在单事务内执行过多行，事务持有锁时间过长。",
+      "phenomenon": "其他会话长时间等待；复制延迟；undo log 膨胀；锁等待超时。",
+      "problem": "单事务修改大量行，长时间持有行锁/表锁，阻塞其他事务，并可能造成主从延迟和回滚段膨胀。",
+      "solution": "1. 拆分为小批次，每批 500–1000 行提交一次；2. 缩短事务内操作，尽快提交；3. 通过 INNODB_TRX 监控长事务，及早发现。",
+      "actions": [{"id": "reproduce", "name": "模拟大事务"}, {"id": "detect", "name": "检测长事务"}]
+    },
+    {
+      "id": "04-large-table",
+      "name": "大表问题",
+      "scenario": "单表数据量持续增长，全表扫描、DDL 变更耗时过长或长时间锁表。",
+      "phenomenon": "查询变慢；ALTER TABLE 执行数小时；锁表导致业务不可用。",
+      "problem": "表过大导致全表扫描、DDL 需要重建表，锁表时间长，影响线上业务。",
+      "solution": "1. 分区：按范围/哈希拆分大表；2. 在线 DDL：MySQL 8.0 ALGORITHM=INPLACE 或 pt-osc、gh-ost；3. 数据归档；4. 合理建索引避免全表扫描。",
+      "actions": [{"id": "reproduce", "name": "模拟大表"}, {"id": "analyze", "name": "分析表大小"}]
+    },
+    {
+      "id": "05-deadlock",
+      "name": "死锁",
+      "scenario": "多事务并发更新，加锁顺序不一致，互相等待对方持有的锁。",
+      "phenomenon": "事务报错 Deadlock found；部分事务被自动回滚；偶发失败需重试。",
+      "problem": "事务 A 锁表1→等表2，事务 B 锁表2→等表1，形成环路。MySQL 会回滚其中一个。",
+      "solution": "1. 统一加锁顺序（如按 ID 升序）；2. 死锁后自动重试；3. 缩短事务；4. 通过索引保证访问路径一致。",
+      "actions": [{"id": "reproduce", "name": "模拟死锁"}, {"id": "analyze", "name": "查看死锁信息"}]
+    },
+    {
+      "id": "06-lock-wait-timeout",
+      "name": "锁等待超时",
+      "scenario": "事务 A 持锁未提交，事务 B 等待同一行锁，超过 innodb_lock_wait_timeout 后报错。",
+      "phenomenon": "报错 Lock wait timeout exceeded；更新/删除操作失败；需手动重试。",
+      "problem": "持锁事务长时间不提交，阻塞其他事务。默认等待 50 秒后超时。",
+      "solution": "1. 缩短持锁时间，尽快提交；2. 调整 innodb_lock_wait_timeout；3. 通过 INNODB_LOCK_WAITS 定位阻塞；4. 必要时 KILL 阻塞会话。",
+      "actions": [{"id": "reproduce", "name": "模拟等待"}]
+    },
+    {
+      "id": "07-index-misuse",
+      "name": "索引使用不当",
+      "scenario": "查询条件列无索引或索引未被使用，导致全表扫描。",
+      "phenomenon": "单条 SQL 执行很慢；EXPLAIN 显示 type=ALL、rows 很大。",
+      "problem": "未建索引或索引不符合查询条件，MySQL 只能全表扫描，数据量大时性能极差。",
+      "solution": "1. 对 WHERE/ORDER BY 列建索引；2. 避免 SELECT *；3. 使用覆盖索引；4. 通过 EXPLAIN 检查执行计划。",
+      "actions": [{"id": "reproduce", "name": "模拟全表扫描"}, {"id": "explain", "name": "查看执行计划"}]
+    },
+    {
+      "id": "08-replication-lag",
+      "name": "主从复制延迟",
+      "scenario": "主从架构下，主库写入激增（如大促），从库单线程 apply binlog 缓慢，Seconds_Behind_Master 持续增大。",
+      "phenomenon": "从库延迟 30+ 分钟；报表数据滞后；relay log 堆积。",
+      "problem": "从库默认单线程复制，大事务或高写入导致 binlog 应用跟不上主库。",
+      "solution": "1. 开启 slave_parallel_workers 并行复制；2. 设置 slave_parallel_type=LOGICAL_CLOCK；3. 拆分大事务；4. 监控 Seconds_Behind_Master。",
+      "actions": [{"id": "reproduce", "name": "模拟大事务"}, {"id": "monitor", "name": "监控延迟"}, {"id": "detect", "name": "检测配置"}]
+    },
+    {
+      "id": "09-cpu-io-high",
+      "name": "CPU/IO 飙高",
+      "scenario": "报表系统每日凌晨执行聚合查询，由于缺少复合索引导致全表扫描，CPU 和 I/O 负载激增。",
+      "phenomenon": "MySQL 服务器 CPU 使用率达 80%+；I/O 等待高；查询耗时从 1 秒飙升到 30+ 秒。",
+      "problem": "SQL 查询缺少合适的索引，执行全表扫描并触发 Filesort 排序，CPU 用于大量行数据的排序和聚合计算。",
+      "solution": "1. 添加复合索引；2. 使用覆盖索引避免回表；3. 避免在索引列上使用函数。",
+      "actions": [{"id": "reproduce", "name": "模拟全表扫描"}, {"id": "explain", "name": "分析执行计划"}, {"id": "optimize", "name": "添加索引优化"}]
+    },
+    {
+      "id": "10-failover",
+      "name": "故障转移（主从切换）",
+      "scenario": "主库故障时，需要手动将从库提升为主库，恢复业务写入。",
+      "phenomenon": "主库 MySQL 无响应；应用写入失败；订单无法创建；支付流程中断。",
+      "problem": "主库故障导致业务中断，需要执行主从切换将从库提升为主库。切换前需确认数据同步，切换后需更新应用连接。",
+      "solution": "1. 检查从库状态，确认 Slave_IO_Running=Yes, Slave_SQL_Running=Yes, Seconds_Behind_Master=0；2. 执行 STOP SLAVE；3. 执行 RESET SLAVE ALL；4. 关闭 read_only 和 super_read_only；5. 更新应用数据库连接配置。",
+      "actions": [{"id": "reproduce", "name": "模拟故障"}, {"id": "prepare", "name": "准备阶段"}, {"id": "switch", "name": "执行切换"}, {"id": "verify", "name": "验证结果"}]
+    }
+  ]
+}

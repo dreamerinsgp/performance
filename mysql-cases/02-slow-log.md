@@ -13,7 +13,7 @@ flowchart LR
     subgraph 问题["问题"]
         D --> E[接口逻辑简单]
         E --> F[怀疑数据库慢]
-        F --> G[❌ 未开慢日志]
+        F --> G[未开慢日志]
         G --> H[无法定位是哪条 SQL]
     end
 

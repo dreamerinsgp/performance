@@ -1,0 +1,98 @@
+{
+  "problem_dirs": {
+    "01-memory": "problems/memory",
+    "02-clients": "problems/clients",
+    "03-slowlog": "problems/slowlog",
+    "04-replication": "problems/replication",
+    "05-stats": "problems/stats",
+    "06-cache-penetration": "problems/cache_penetration",
+    "07-bigkey": "problems/bigkey"
+  },
+  "problems": [
+    {
+      "id": "01-memory",
+      "name": "内存占用高",
+      "scenario": "某社交 App 使用 Redis 缓存用户会话，半年累计数千万 key 未设置过期，used_memory 从 2GB 增长到 12GB 逼近 maxmemory，触发逐出后缓存命中率从 95% 降到 40%。",
+      "phenomenon": "内存使用率 >90%；evicted_keys 增加；应用报 OOM 或连接失败。",
+      "problem": "内存超过 maxmemory 时 Redis 按策略逐出 key，影响缓存命中；云 Redis 可能因超限被限流。",
+      "solution": "1. 监控 used_memory / maxmemory；2. 排查大 key（MEMORY USAGE、redis-cli --bigkeys）；3. 设置合理过期时间；4. 升级实例或拆分 key。",
+      "actions": [
+        {"id": "info", "name": "查看内存"},
+        {"id": "bigkeys", "name": "大 key 采样"}
+      ]
+    },
+    {
+      "id": "02-clients",
+      "name": "连接数耗尽",
+      "scenario": "微服务集群 80 实例，每实例 Redis 连接池 50，某次发布引入连接泄漏 bug，约 1 小时后新请求报错 max number of clients reached，业务全面中断。",
+      "phenomenon": "新连接报错 max number of clients reached；应用无法访问 Redis。",
+      "problem": "Redis maxclients 默认为 10000，云 Redis 可能更低；连接未释放会占满。",
+      "solution": "1. 应用使用连接池并限制大小；2. 检查 blocked_clients；3. 调整 maxclients（如有权限）；4. 排查连接泄漏。",
+      "actions": [
+        {"id": "info", "name": "查看连接"}
+      ]
+    },
+    {
+      "id": "03-slowlog",
+      "name": "慢命令",
+      "scenario": "商品搜索接口偶发超时，DBA 发现 Redis 慢命令日志有大量 KEYS *、HGETALL 大 hash，单命令阻塞主线程数秒。",
+      "phenomenon": "接口 P99 延迟升高；slowlog 出现大量慢命令；用户反馈超时。",
+      "problem": "部分命令执行时间超过 slowlog-log-slower-than 阈值，阻塞单线程。",
+      "solution": "1. 开启 slowlog；2. 避免 KEYS *，用 SCAN；3. 大 hash 用 HSCAN；4. 合理设置超时。",
+      "actions": [
+        {"id": "info", "name": "查看慢日志配置"},
+        {"id": "slowlog", "name": "最近慢命令"}
+      ]
+    },
+    {
+      "id": "04-replication",
+      "name": "主从延迟",
+      "scenario": "订单系统主从读写分离，大促时主库写入激增，从库 master_last_io_seconds_ago 持续增大，报表查到 30 分钟前的旧数据。",
+      "phenomenon": "master_last_io_seconds_ago 变大；从库数据滞后；读写分离读到过期数据。",
+      "problem": "主库写入量大或从库性能不足，复制积压；网络抖动也会导致延迟。",
+      "solution": "1. 监控 replication 指标；2. 升级从库或增加从节点；3. 避免大 key 和批量写。",
+      "actions": [
+        {"id": "info", "name": "查看复制状态"}
+      ]
+    },
+    {
+      "id": "05-stats",
+      "name": "运行统计",
+      "scenario": "日常巡检需快速了解 Redis 运行状态，包括 server、clients、memory、stats 等关键指标及命中率、evicted 等。",
+      "phenomenon": "-",
+      "problem": "-",
+      "solution": "定期查看 info、监控命中率、evicted 等。",
+      "actions": [
+        {"id": "info", "name": "INFO 全量"},
+        {"id": "stats", "name": "命令统计"}
+      ]
+    },
+    {
+      "id": "06-cache-penetration",
+      "name": "缓存穿透",
+      "scenario": "电商商品详情页，用户请求已下架或恶意猜测不存在的商品 ID，每次缓存未命中都直接打到数据库，大量穿透请求压垮 DB。",
+      "phenomenon": "数据库负载异常升高；缓存命中率异常低；大量查询不存在的 key。",
+      "problem": "查询不存在的 key 时，缓存未命中直接打到数据库，大量穿透请求会压垮数据库。",
+      "solution": "1. 空值缓存：将空结果也缓存，设置短 TTL；2. 布隆过滤器：快速判断 key 是否可能存在；3. 入口校验：过滤无效请求。",
+      "actions": [
+        {"id": "info", "name": "穿透演示"},
+        {"id": "simulate", "name": "模拟空值缓存"},
+        {"id": "bloom", "name": "布隆过滤器方案"}
+      ]
+    },
+    {
+      "id": "07-bigkey",
+      "name": "大 Key 问题",
+      "scenario": "电商购物车用 Hash 存储用户所有商品，某用户加入数万 SKU 后单 key 达数百 MB，HGETALL 阻塞主线程数秒，主从复制超时。",
+      "phenomenon": "内存使用率飙升；主从复制超时；单命令执行阻塞（秒级）；慢查询增多。",
+      "problem": "O(N) 命令（HGETALL、LRANGE 等）遍历大 Key 时阻塞 Redis 主线程，影响所有请求；大 Key 占用大量内存可能导致 OOM。",
+      "solution": "1. 拆分大 Key：将大 Hash/List 拆分为多个小 Key；2. 避免 O(N) 命令：用 HSCAN/SSCAN/ZSCAN 代替；3. 定期扫描排查；4. 使用 UNLINK 异步删除。",
+      "actions": [
+        {"id": "info", "name": "查看大 Key 信息"},
+        {"id": "scan", "name": "扫描大 Key"},
+        {"id": "demo", "name": "演示大 Key 问题"},
+        {"id": "split", "name": "演示拆分方案"}
+      ]
+    }
+  ]
+}

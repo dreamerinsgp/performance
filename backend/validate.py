@@ -24,10 +24,17 @@ def check_tcp(host: str, port: int, timeout: float = 3.0) -> Tuple[bool, str]:
         return False, str(e)
 
 
-def check_redis(host: str, port: int, password: str = "") -> Tuple[bool, str]:
-    """Check Redis connection and PING."""
+def check_redis(
+    host: str, port: int, password: str = "", username: str = ""
+) -> Tuple[bool, str]:
+    """Check Redis connection and PING. username for Redis 6+ ACL (e.g. Aliyun 普通账号)."""
     try:
-        r = redis.Redis(host=host, port=port, password=password or None, socket_connect_timeout=5)
+        kwargs = {"host": host, "port": port, "socket_connect_timeout": 5}
+        if password:
+            kwargs["password"] = password
+        if username:
+            kwargs["username"] = username
+        r = redis.Redis(**kwargs)
         r.ping()
         return True, "PONG"
     except redis.ConnectionError as e:
@@ -187,6 +194,7 @@ def validate_all(config: dict) -> dict:
         r.get("host", "127.0.0.1"),
         r.get("port", 6379),
         r.get("password", ""),
+        r.get("username", ""),
     )
     results["redis"] = {"ok": ok, "message": msg}
 

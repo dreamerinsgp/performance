@@ -30,6 +30,7 @@
       <button id="tab-monitor" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="monitor">Monitor</button>
       <button id="tab-perftest" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="perftest">Perf Test</button>
       <button id="tab-mysqlops" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="mysqlops">MySQL Ops</button>
+      <button id="tab-redisops" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="redisops">Redis Ops</button>
     </div>
 
     <!-- Tab: Config -->
@@ -43,7 +44,8 @@
               <label class="block text-sm font-medium text-gray-700 mb-1">Redis</label>
               <input type="text" id="redis-host" placeholder="IP" class="w-full border rounded px-3 py-2">
               <input type="number" id="redis-port" placeholder="端口" value="6379" class="w-20 border rounded px-3 py-2 mt-1">
-              <input type="password" id="redis-password" placeholder="密码(可选)" class="w-full border rounded px-3 py-2 mt-1">
+              <input type="text" id="redis-username" placeholder="用户名(阿里云普通账号需填)" class="w-full border rounded px-3 py-2 mt-1">
+              <input type="password" id="redis-password" placeholder="密码" class="w-full border rounded px-3 py-2 mt-1">
             </div>
             <div class="border rounded p-3">
               <label class="block text-sm font-medium text-gray-700 mb-1">MySQL</label>
@@ -93,6 +95,18 @@
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Gateway 地址（性能压测用，默认项目服务器:8081）</label>
             <input type="url" id="gateway-url" placeholder="http://项目服务器IP:8081" class="w-full border rounded px-3 py-2">
+          </div>
+          <h3 class="text-lg font-semibold mt-6">4. OpenClaw（AI 生成 MySQL 案例）</h3>
+          <p class="text-sm text-gray-500 mb-2">用于从页面添加新问题时，调用 OpenClaw Agent 自动生成可运行案例。需本地或内网可访问 OpenClaw Gateway。</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">OpenClaw Gateway URL</label>
+              <input type="url" id="openclaw-gateway-url" placeholder="http://127.0.0.1:18789" class="w-full border rounded px-3 py-2">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Hooks Token</label>
+              <input type="password" id="openclaw-hooks-token" placeholder="与 openclaw.json hooks.token 一致" class="w-full border rounded px-3 py-2">
+            </div>
           </div>
           <div class="flex gap-3">
             <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Save Config</button>
@@ -197,7 +211,13 @@
             </div>
           </div>
         </div>
-        <h3 class="font-medium mb-3">问题列表（点击展开查看业务场景与详情）</h3>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-medium">问题列表（点击展开查看业务场景与详情）</h3>
+          <div class="flex gap-2">
+            <button id="btn-mysql-ops-refresh-list" class="px-3 py-2 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200" title="AI 生成完成后点击刷新">刷新列表</button>
+            <button id="btn-mysql-ops-add" class="px-4 py-2 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700">+ 添加新问题（AI 生成）</button>
+          </div>
+        </div>
         <div id="mysql-ops-cards" class="space-y-2">
           <!-- 静态兜底：JS 未加载或失败时仍显示列表 -->
           <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden">
@@ -243,6 +263,28 @@
             </div>
           </div>
         </div>
+        <div id="mysql-add-modal" class="fixed inset-0 z-50 hidden">
+          <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-4" id="mysql-add-modal-backdrop">
+            <div class="bg-white rounded-lg shadow-xl max-w-xl w-full">
+              <div class="flex justify-between items-center p-4 border-b">
+                <h3 class="font-semibold">添加新问题（AI 自动生成案例）</h3>
+                <button id="mysql-add-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
+              </div>
+              <form id="mysql-add-form" class="p-4 space-y-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">问题 *</label>
+                  <input type="text" id="mysql-add-problem" placeholder="如：CPU/IO 飙高、binlog 过大、主从复制延迟、N+1 查询" required class="w-full border rounded px-3 py-2">
+                  <p class="text-xs text-gray-500 mt-1">只需填写问题名称，业务场景、现象、技术点将由 AI 自动生成</p>
+                </div>
+                <p id="mysql-add-status" class="text-sm text-gray-600"></p>
+                <div class="flex justify-end gap-2">
+                  <button type="button" id="mysql-add-cancel" class="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300">取消</button>
+                  <button type="submit" id="mysql-add-submit" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">提交生成</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
         <div id="mysql-code-modal" class="fixed inset-0 z-50 hidden">
           <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-2 md:p-4" id="mysql-code-modal-backdrop">
             <div class="bg-white rounded-lg shadow-xl w-[98vw] max-w-none h-[94vh] overflow-hidden flex flex-col">
@@ -283,6 +325,91 @@
           </div>
           <p class="text-xs text-gray-500 mb-1">点击上方 Run 按钮后，工具输出将显示于此。</p>
           <pre id="mysql-ops-output" class="p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 font-mono whitespace-pre-wrap min-h-[80px] hidden"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Redis Ops -->
+    <div id="panel-redisops" class="tab-panel hidden">
+      <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-xl font-semibold mb-4">Redis 运维学习</h2>
+        <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 Redis 运维问题，并通过工具查看状态。</p>
+        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="redis-ops-status"></div>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-medium">问题列表</h3>
+          <div class="flex gap-2">
+            <button id="btn-redis-ops-refresh" class="px-3 py-2 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200" title="AI 生成完成后点击刷新">刷新列表</button>
+            <button id="btn-redis-ops-add" class="px-4 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700">+ 添加新问题（AI 生成）</button>
+          </div>
+        </div>
+        <div id="redis-ops-cards" class="space-y-2"></div>
+        <div class="mt-6 border-t pt-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-medium">执行输出</h3>
+            <button id="btn-redis-ops-copy" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">复制输出</button>
+          </div>
+          <pre id="redis-ops-output" class="p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 font-mono whitespace-pre-wrap min-h-[80px] hidden"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Redis Ops modals (fixed overlay, outside tab panels) -->
+    <div id="redis-case-modal" class="fixed inset-0 z-50 hidden">
+      <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-4" id="redis-case-modal-backdrop">
+        <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] flex flex-col">
+          <div class="flex justify-between items-center p-4 border-b">
+            <h3 id="redis-case-modal-title" class="font-semibold">完整案例</h3>
+            <button id="redis-case-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
+          </div>
+          <div id="redis-case-modal-body" class="p-4 overflow-auto text-sm flex-1 mysql-case-content"></div>
+        </div>
+      </div>
+    </div>
+    <div id="redis-add-modal" class="fixed inset-0 z-50 hidden">
+      <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-4" id="redis-add-modal-backdrop">
+        <div class="bg-white rounded-lg shadow-xl max-w-xl w-full">
+          <div class="flex justify-between items-center p-4 border-b">
+            <h3 class="font-semibold">添加新问题（AI 自动生成案例）</h3>
+            <button id="redis-add-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
+          </div>
+          <form id="redis-add-form" class="p-4 space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">问题 *</label>
+              <input type="text" id="redis-add-problem" placeholder="如：内存碎片、热 key、哨兵切换、持久化阻塞" required class="w-full border rounded px-3 py-2">
+              <p class="text-xs text-gray-500 mt-1">只需填写问题名称，业务场景、现象、技术点将由 AI 自动生成</p>
+            </div>
+            <p id="redis-add-status" class="text-sm text-gray-600"></p>
+            <div class="flex justify-end gap-2">
+              <button type="button" id="redis-add-cancel" class="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300">取消</button>
+              <button type="submit" id="redis-add-submit" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">提交生成</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div id="redis-code-modal" class="fixed inset-0 z-50 hidden">
+      <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-2 md:p-4" id="redis-code-modal-backdrop">
+        <div class="bg-white rounded-lg shadow-xl w-[98vw] max-w-none h-[94vh] overflow-hidden flex flex-col">
+          <div class="flex justify-between items-center p-4 border-b">
+            <h3 id="redis-code-modal-title" class="font-semibold">问题代码</h3>
+            <button id="redis-code-close" class="text-gray-500 hover:text-gray-700">✕</button>
+          </div>
+          <div class="p-3 md:p-4 border-b bg-gray-50 space-y-2">
+            <div class="flex flex-wrap gap-3 items-end">
+              <div>
+                <label class="block text-xs text-gray-600 mb-1">代码文件</label>
+                <select id="redis-code-file-select" class="border rounded px-3 py-2 text-sm min-w-[380px]"></select>
+              </div>
+              <button id="redis-code-save-btn" class="px-3 py-2 bg-red-600 text-white rounded text-sm hover:bg-red-700">保存修改</button>
+              <div>
+                <label class="block text-xs text-gray-600 mb-1">重新运行动作</label>
+                <select id="redis-code-run-action" class="border rounded px-3 py-2 text-sm min-w-[220px]"></select>
+              </div>
+              <button id="redis-code-run-btn" class="px-3 py-2 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700">保存并运行</button>
+            </div>
+            <p id="redis-code-status" class="text-xs text-gray-500"></p>
+          </div>
+          <textarea id="redis-code-editor" class="flex-1 w-full p-4 md:p-5 font-mono text-[14px] leading-6 border-0 outline-none resize-none"></textarea>
         </div>
       </div>
     </div>

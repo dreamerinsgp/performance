@@ -38,6 +38,40 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Redis Ops 事件委托
+document.addEventListener('click', (e) => {
+  const cards = document.getElementById('redis-ops-cards');
+  if (!cards || !cards.contains(e.target)) return;
+  if (e.target.closest('.redis-ops-toggle')) {
+    const btn = e.target.closest('.redis-ops-toggle');
+    const card = btn.closest('.border.rounded-lg');
+    if (card) {
+      const body = card.querySelector('.redis-ops-body');
+      const chevron = card.querySelector('.redis-ops-chevron');
+      if (body && chevron) {
+        const isOpen = !body.classList.contains('hidden');
+        body.classList.toggle('hidden', isOpen);
+        chevron.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+      }
+    }
+  } else if (e.target.closest('.redis-ops-run-btn')) {
+    const btn = e.target.closest('.redis-ops-run-btn');
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof runRedisOps === 'function') runRedisOps(btn.dataset.problem, btn.dataset.action, btn);
+  } else if (e.target.closest('.redis-case-link')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = e.target.closest('.redis-case-link');
+    if (typeof openRedisCaseModal === 'function') openRedisCaseModal(link.dataset.problem);
+  } else if (e.target.closest('.redis-code-link')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = e.target.closest('.redis-code-link');
+    if (typeof openRedisCodeModal === 'function') openRedisCodeModal(link.dataset.problem);
+  }
+});
+
 // Tab switching
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -61,6 +95,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     } else if (btn.dataset.tab === 'mysqlops') {
       loadMysqlOpsStatus();
       updateMysqlOpsActions();
+    } else if (btn.dataset.tab === 'redisops') {
+      loadRedisOpsStatus();
     } else {
       clearInterval(metricsRefreshInterval);
       metricsRefreshInterval = null;
@@ -76,6 +112,7 @@ async function loadConfig() {
     const c = data.config;
     $('redis-host').value = c.redis?.host || '';
     $('redis-port').value = c.redis?.port || 6379;
+    $('redis-username').value = c.redis?.username || '';
     $('redis-password').value = c.redis?.password || '';
     $('mysql-host').value = c.mysql?.host || '';
     $('mysql-port').value = c.mysql?.port || 3306;
@@ -88,6 +125,17 @@ async function loadConfig() {
     $('github-branch').value = c.github?.branch || 'main';
     $('github-subpath').value = c.github?.subpath || '';
     $('gateway-url').value = c.gateway_url || (c.app_server?.host ? 'http://' + c.app_server.host + ':8081' : '');
+    const ocUrl = $('openclaw-gateway-url');
+    const ocToken = $('openclaw-hooks-token');
+    if (ocUrl && ocToken) {
+      if (c.openclaw) {
+        ocUrl.value = c.openclaw.gateway_url || 'http://127.0.0.1:18789';
+        ocToken.value = c.openclaw.hooks_token || '';
+      } else {
+        ocUrl.value = 'http://127.0.0.1:18789';
+        ocToken.value = '';
+      }
+    }
     if (c.app_server) {
       $('app-server-host').value = c.app_server.host || '';
       $('app-server-ssh-port').value = c.app_server.ssh_port || 22;
@@ -103,7 +151,7 @@ loadConfig();
 $('config-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = {
-    redis: { host: $('redis-host').value || '127.0.0.1', port: parseInt($('redis-port').value) || 6379, password: $('redis-password').value },
+    redis: { host: $('redis-host').value || '127.0.0.1', port: parseInt($('redis-port').value) || 6379, username: ($('redis-username').value || '').trim(), password: $('redis-password').value },
     mysql: { host: $('mysql-host').value || '127.0.0.1', port: parseInt($('mysql-port').value) || 3306, user: $('mysql-user').value, password: $('mysql-password').value, database: $('mysql-database').value },
     mysql_init_sql: $('mysql-init-sql').value?.trim() || '',
     kafka: { brokers: $('kafka-brokers').value || '127.0.0.1:9092' },
@@ -116,6 +164,10 @@ $('config-form').addEventListener('submit', async (e) => {
     },
     github: { repo_url: $('github-repo').value, branch: $('github-branch').value, subpath: $('github-subpath').value },
     gateway_url: $('gateway-url').value || 'http://127.0.0.1:8080',
+    openclaw: {
+      gateway_url: ($('openclaw-gateway-url')?.value || 'http://127.0.0.1:18789').trim(),
+      hooks_token: ($('openclaw-hooks-token')?.value || '').trim(),
+    },
   };
   const res = await fetch(API_BASE + '/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (res.ok) alert('Config saved.');
@@ -829,18 +881,543 @@ function initMysqlOpsOutputCopy() {
   btn.addEventListener('click', copyMysqlOpsOutput);
 }
 
+function openMysqlAddModal() {
+  const modal = $('mysql-add-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  const problemEl = $('mysql-add-problem');
+  if (problemEl) problemEl.value = '';
+  const statusEl = $('mysql-add-status');
+  if (statusEl) statusEl.textContent = '';
+}
+
+let _mysqlAddGeneratePollTimer = null;
+
+function closeMysqlAddModal() {
+  if (_mysqlAddGeneratePollTimer) {
+    clearInterval(_mysqlAddGeneratePollTimer);
+    _mysqlAddGeneratePollTimer = null;
+  }
+  const modal = $('mysql-add-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function initMysqlAddModal() {
+  const addBtn = $('btn-mysql-ops-add');
+  const modal = $('mysql-add-modal');
+  const closeBtn = $('mysql-add-modal-close');
+  const cancelBtn = $('mysql-add-cancel');
+  const backdrop = document.getElementById('mysql-add-modal-backdrop');
+  const form = $('mysql-add-form');
+  if (!addBtn || !form || addBtn.dataset.bound === '1') return;
+  addBtn.dataset.bound = '1';
+  addBtn.addEventListener('click', openMysqlAddModal);
+  const refreshBtn = $('btn-mysql-ops-refresh-list');
+  if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+    refreshBtn.dataset.bound = '1';
+    refreshBtn.addEventListener('click', () => {
+      if (typeof loadMysqlOpsStatus === 'function') loadMysqlOpsStatus();
+    });
+  }
+  if (closeBtn) closeBtn.addEventListener('click', closeMysqlAddModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeMysqlAddModal);
+  if (backdrop) backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeMysqlAddModal(); });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const problem = $('mysql-add-problem').value?.trim();
+    const statusEl = $('mysql-add-status');
+    const submitBtn = $('mysql-add-submit');
+    if (!problem) {
+      statusEl.textContent = '请填写问题名称';
+      statusEl.className = 'text-sm text-red-600';
+      return;
+    }
+    submitBtn.disabled = true;
+    statusEl.textContent = '提交中...';
+    statusEl.className = 'text-sm text-gray-600';
+    try {
+      const res = await fetch(API_BASE + '/api/mysql-ops/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ problem }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        const initialCount = (MYSQL_OPS_LAST_PROBLEMS || []).length;
+        statusEl.textContent = '已提交。正在检测新案例（约 1–3 分钟）…';
+        statusEl.className = 'text-sm text-green-600';
+        const maxPolls = 12;
+        let pollCount = 0;
+        const doPoll = async () => {
+          pollCount++;
+          try {
+            if (typeof loadMysqlOpsStatus === 'function') await loadMysqlOpsStatus();
+            const current = MYSQL_OPS_LAST_PROBLEMS || [];
+            if (current.length > initialCount) {
+              if (_mysqlAddGeneratePollTimer) {
+                clearInterval(_mysqlAddGeneratePollTimer);
+                _mysqlAddGeneratePollTimer = null;
+              }
+              const newProblem = current.find((p, i) => i >= initialCount);
+              statusEl.textContent = '✓ 新案例已生成：' + (newProblem ? newProblem.id + ' - ' + (newProblem.name || '') : '');
+              statusEl.className = 'text-sm text-green-600 font-medium';
+              setTimeout(closeMysqlAddModal, 2500);
+              return;
+            }
+          } catch (_) {}
+          if (pollCount >= maxPolls) {
+            if (_mysqlAddGeneratePollTimer) {
+              clearInterval(_mysqlAddGeneratePollTimer);
+              _mysqlAddGeneratePollTimer = null;
+            }
+            statusEl.textContent = '超时。若已生成请点击「刷新列表」查看。';
+            statusEl.className = 'text-sm text-amber-600';
+          } else {
+            statusEl.textContent = `正在检测…（${pollCount}/${maxPolls}，每 25 秒）`;
+          }
+        };
+        _mysqlAddGeneratePollTimer = setInterval(doPoll, 25000);
+        doPoll();
+      } else {
+        statusEl.textContent = data.detail || data.message || '提交失败（请检查 Infra Config 中的 OpenClaw 配置）';
+        statusEl.className = 'text-sm text-red-600';
+      }
+    } catch (err) {
+      statusEl.textContent = '请求失败：' + (err.message || String(err));
+      statusEl.className = 'text-sm text-red-600';
+    }
+    submitBtn.disabled = false;
+  });
+}
+
 // 页面加载时立即渲染问题列表，确保列表始终可见（不依赖 tab 切换或 API）
 function initMysqlOpsCardsOnLoad() {
   const cardsEl = document.getElementById('mysql-ops-cards');
   const statusEl = document.getElementById('mysql-ops-status');
   initMysqlCodeModal();
+  initMysqlAddModal();
   initMysqlConnectionLimitControls();
   if (cardsEl) renderMysqlOpsCards(MYSQL_OPS_PROBLEMS_FALLBACK);
   initMysqlOpsOutputCopy();
   if (statusEl && !statusEl.textContent) statusEl.innerHTML = '<span class="text-gray-600">点击问题标题展开查看业务场景与详情。切换到此 Tab 后将尝试加载服务端数据。</span>';
 }
+
+// ========== Redis Ops ==========
+let REDIS_OPS_LAST_PROBLEMS = [];
+
+function renderRedisOpsCards(problems) {
+  const cardsEl = $('redis-ops-cards');
+  if (!cardsEl) return;
+  const list = (problems && problems.length) ? problems : (REDIS_OPS_LAST_PROBLEMS || []);
+  const esc = (s) => (s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  cardsEl.innerHTML = list.map((p, i) => {
+    const expanded = i === 0;
+    return `
+      <div class="border rounded-lg bg-white border-l-4 border-red-500 shadow-sm overflow-hidden">
+        <button type="button" class="redis-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-red-50 transition-colors" data-idx="${i}">
+          <span class="font-semibold text-red-700">${String(i + 1).padStart(2, '0')} ${p.name}</span>
+          <span class="redis-ops-chevron text-gray-400 text-sm transform transition-transform" style="transform: rotate(${expanded ? 180 : 0}deg)">▼</span>
+        </button>
+        <div class="redis-ops-body border-t border-gray-100 ${expanded ? '' : 'hidden'}">
+          <div class="p-4 space-y-4">
+            ${(p.business_scenario || p.businessScenario) ? `
+            <div class="p-3 bg-sky-50 border-l-4 border-sky-400 rounded text-sm text-gray-700">
+              <span class="font-medium text-sky-800 block mb-1">真实业务场景</span>
+              <p>${esc(p.business_scenario || p.businessScenario)}</p>
+            </div>
+            ` : ''}
+            <div class="space-y-3 text-sm">
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-xs font-medium">1</span>
+                <div><span class="font-medium text-gray-700">业务场景：</span><span class="text-gray-600">${esc(p.scenario)}</span></div>
+              </div>
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium">2</span>
+                <div><span class="font-medium text-gray-700">现象：</span><span class="text-gray-600">${esc(p.phenomenon)}</span></div>
+              </div>
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs font-medium">3</span>
+                <div><span class="font-medium text-gray-700">问题：</span><span class="text-gray-600">${esc(p.problem)}</span></div>
+              </div>
+              <div class="flex gap-2">
+                <span class="shrink-0 px-2 py-0.5 rounded bg-green-100 text-green-800 text-xs font-medium">4</span>
+                <div><span class="font-medium text-gray-700">解决方案：</span><span class="text-gray-600">${esc(p.solution)}</span></div>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 pt-2 border-t items-center">
+              ${(p.actions || []).map(a => `
+                <button class="redis-ops-run-btn px-3 py-1.5 bg-red-600 text-white rounded text-sm hover:bg-red-700 disabled:opacity-50" data-problem="${p.id}" data-action="${a.id}">Run: ${a.name}</button>
+              `).join('')}
+              <a href="#" class="redis-case-link text-sky-600 hover:text-sky-800 text-sm ml-2" data-problem="${p.id}">查看完整案例</a>
+              <button class="redis-code-link px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200" data-problem="${p.id}">查看/修改代码</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  if (!list.length) {
+    cardsEl.innerHTML = '<p class="text-gray-500 text-sm py-4">暂无问题列表，请检查 Redis 配置后点击刷新。</p>';
+  }
+}
+
+async function loadRedisOpsStatus() {
+  const statusEl = $('redis-ops-status');
+  const cardsEl = $('redis-ops-cards');
+  if (!statusEl || !cardsEl) return;
+  try {
+    const res = await fetch(API_BASE + '/api/redis-ops/problems');
+    const data = await res.json();
+    const problems = data.problems || [];
+    REDIS_OPS_LAST_PROBLEMS = problems;
+    renderRedisOpsCards(problems);
+    if (data.redis_available) {
+      statusEl.innerHTML = '<span class="text-green-700">✓ Redis 已就绪。使用 Infra 配置连接。</span>';
+    } else {
+      statusEl.innerHTML = '<span class="text-amber-700">⚠ 请先在 Infra Config 中配置 Redis。</span>';
+    }
+  } catch (e) {
+    statusEl.innerHTML = '<span class="text-amber-700">加载失败：' + (e.message || e) + '</span>';
+    renderRedisOpsCards([]);
+  }
+}
+
+async function runRedisOps(problem, action, btn) {
+  const out = $('redis-ops-output');
+  if (!out) return;
+  if (btn) btn.disabled = true;
+  out.classList.remove('hidden');
+  out.textContent = 'Running...';
+  try {
+    const res = await fetch(API_BASE + '/api/redis-ops/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ problem, action }),
+    });
+    const data = await res.json();
+    let text = data.stdout || '';
+    if (data.stderr) text += (text ? '\n\n' : '') + 'STDERR:\n' + data.stderr;
+    if (!text && data.detail) text = 'ERROR:\n' + data.detail;
+    out.textContent = text || '(no output)';
+    out.classList.remove('text-red-400');
+    if (!data.ok) out.classList.add('text-red-400');
+    out.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    out.textContent = 'Error: ' + e.message;
+    out.classList.add('text-red-400');
+  }
+  if (btn) btn.disabled = false;
+}
+
+function renderRedisCaseContent(md) {
+  if (!md) return '';
+  const parts = [];
+  let rest = md;
+  const re = /```mermaid\r?\n([\s\S]*?)\r?\n```/gi;
+  let lastIdx = 0;
+  let m;
+  while ((m = re.exec(md)) !== null) {
+    parts.push({ type: 'md', text: md.slice(lastIdx, m.index) });
+    parts.push({ type: 'mermaid', code: m[1].trim() });
+    lastIdx = re.lastIndex;
+  }
+  parts.push({ type: 'md', text: md.slice(lastIdx) });
+  let out = '';
+  for (const p of parts) {
+    if (p.type === 'mermaid') {
+      out += '<div class="mermaid my-4">' + p.code + '</div>';
+    } else if (p.type === 'md' && p.text) {
+      out += typeof marked !== 'undefined' ? marked.parse(p.text) : p.text.replace(/</g, '&lt;');
+    }
+  }
+  return out;
+}
+
+async function openRedisCaseModal(problemId) {
+  const modal = document.getElementById('redis-case-modal');
+  const titleEl = document.getElementById('redis-case-modal-title');
+  const bodyEl = document.getElementById('redis-case-modal-body');
+  const closeBtn = document.getElementById('redis-case-modal-close');
+  const backdrop = document.getElementById('redis-case-modal-backdrop');
+  if (!modal || !titleEl || !bodyEl) return;
+  titleEl.textContent = '加载中...';
+  bodyEl.innerHTML = '';
+  modal.classList.remove('hidden');
+  try {
+    const res = await fetch(API_BASE + '/api/redis-ops/case/' + encodeURIComponent(problemId));
+    const data = await res.json();
+    titleEl.textContent = '完整业务案例 - ' + problemId;
+    const html = renderRedisCaseContent(data.content || '无内容');
+    bodyEl.innerHTML = html;
+    if (typeof mermaid !== 'undefined') {
+      const mermaidNodes = bodyEl.querySelectorAll('.mermaid');
+      if (mermaidNodes.length) {
+        try {
+          mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+          await new Promise(r => requestAnimationFrame(r));
+          await mermaid.run({ nodes: mermaidNodes, suppressErrors: true });
+        } catch (err) {
+          console.warn('Mermaid render:', err);
+          mermaidNodes.forEach(n => { n.innerHTML = '<pre class="text-xs text-amber-600">' + n.textContent + '</pre>'; });
+        }
+      }
+    }
+  } catch (e) {
+    titleEl.textContent = '加载失败';
+    bodyEl.innerHTML = '<p class="text-red-600">Error: ' + (e.message || e) + '</p>';
+  }
+  function closeModal() {
+    modal.classList.add('hidden');
+    document.removeEventListener('keydown', onEsc);
+  }
+  function onEsc(e) {
+    if (e.key === 'Escape') closeModal();
+  }
+  closeBtn.onclick = closeModal;
+  backdrop.onclick = (e) => { if (e.target === backdrop) closeModal(); };
+  document.addEventListener('keydown', onEsc);
+}
+
+function getRedisProblemById(problemId) {
+  return (REDIS_OPS_LAST_PROBLEMS || []).find(p => p.id === problemId);
+}
+
+const REDIS_CODE_MODAL_STATE = { problemId: '', filePath: '' };
+
+async function loadRedisCodeFile(problemId, filePath) {
+  const editor = $('redis-code-editor');
+  const status = $('redis-code-status');
+  if (!editor || !status) return;
+  status.textContent = '加载文件中...';
+  const res = await fetch(API_BASE + '/api/redis-ops/code/' + encodeURIComponent(problemId) + '?path=' + encodeURIComponent(filePath));
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || '加载失败');
+  editor.value = data.content || '';
+  REDIS_CODE_MODAL_STATE.filePath = data.path || filePath;
+  status.textContent = '已加载：' + REDIS_CODE_MODAL_STATE.filePath;
+}
+
+async function openRedisCodeModal(problemId) {
+  const modal = $('redis-code-modal');
+  const title = $('redis-code-modal-title');
+  const fileSel = $('redis-code-file-select');
+  const runSel = $('redis-code-run-action');
+  const status = $('redis-code-status');
+  const editor = $('redis-code-editor');
+  if (!modal || !title || !fileSel || !runSel || !status || !editor) return;
+
+  REDIS_CODE_MODAL_STATE.problemId = problemId;
+  REDIS_CODE_MODAL_STATE.filePath = '';
+  const p = getRedisProblemById(problemId);
+  title.textContent = `问题代码 - ${p ? p.name : problemId}`;
+  editor.value = '';
+  fileSel.innerHTML = '';
+  runSel.innerHTML = ((p && p.actions) || []).map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+
+  modal.classList.remove('hidden');
+  status.textContent = '正在获取文件列表...';
+  try {
+    const res = await fetch(API_BASE + '/api/redis-ops/code/' + encodeURIComponent(problemId) + '/files');
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = '获取文件失败：' + (data.detail || 'unknown');
+      return;
+    }
+    const files = data.files || [];
+    if (!files.length) {
+      status.textContent = '当前问题目录下没有可编辑文件。请确保 redis-ops-learning 存在于 performance 同级目录。';
+      return;
+    }
+    fileSel.innerHTML = files.map(f => `<option value="${f}">${f}</option>`).join('');
+    await loadRedisCodeFile(problemId, files[0]);
+  } catch (e) {
+    status.textContent = '获取失败：' + (e.message || e);
+  }
+}
+
+async function saveRedisCodeModal() {
+  const problemId = REDIS_CODE_MODAL_STATE.problemId;
+  const fileSel = $('redis-code-file-select');
+  const editor = $('redis-code-editor');
+  const status = $('redis-code-status');
+  if (!problemId || !fileSel || !editor || !status) return;
+  const path = fileSel.value;
+  status.textContent = '保存中...';
+  const res = await fetch(API_BASE + '/api/redis-ops/code/' + encodeURIComponent(problemId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content: editor.value }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    status.textContent = '保存失败：' + (data.detail || 'unknown');
+    return;
+  }
+  status.textContent = '保存成功：' + (data.path || path);
+}
+
+function initRedisCodeModal() {
+  const modal = $('redis-code-modal');
+  const backdrop = $('redis-code-modal-backdrop');
+  const closeBtn = $('redis-code-close');
+  const fileSel = $('redis-code-file-select');
+  const saveBtn = $('redis-code-save-btn');
+  const runBtn = $('redis-code-run-btn');
+  const runSel = $('redis-code-run-action');
+  const editor = $('redis-code-editor');
+  if (!modal || !backdrop || !closeBtn || !fileSel || !saveBtn || !runBtn || !runSel || !editor) return;
+  if (modal.dataset.bound === '1') return;
+  modal.dataset.bound = '1';
+
+  const closeModal = () => modal.classList.add('hidden');
+  closeBtn.addEventListener('click', closeModal);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+  });
+  fileSel.addEventListener('change', async () => {
+    if (!REDIS_CODE_MODAL_STATE.problemId || !fileSel.value) return;
+    try {
+      await loadRedisCodeFile(REDIS_CODE_MODAL_STATE.problemId, fileSel.value);
+    } catch (e) {
+      const status = $('redis-code-status');
+      if (status) status.textContent = '加载失败：' + e.message;
+    }
+  });
+  saveBtn.addEventListener('click', saveRedisCodeModal);
+  runBtn.addEventListener('click', async () => {
+    await saveRedisCodeModal();
+    const action = runSel.value;
+    if (!REDIS_CODE_MODAL_STATE.problemId || !action) return;
+    await runRedisOps(REDIS_CODE_MODAL_STATE.problemId, action, runBtn);
+  });
+}
+
+function initRedisOpsOnLoad() {
+  const refreshBtn = $('btn-redis-ops-refresh');
+  const copyBtn = $('btn-redis-ops-copy');
+  if (refreshBtn && refreshBtn.dataset.bound !== '1') {
+    refreshBtn.dataset.bound = '1';
+    refreshBtn.addEventListener('click', loadRedisOpsStatus);
+  }
+  if (copyBtn && copyBtn.dataset.bound !== '1') {
+    copyBtn.dataset.bound = '1';
+    copyBtn.addEventListener('click', () => {
+      const out = $('redis-ops-output');
+      if (out && out.textContent) {
+        navigator.clipboard.writeText(out.textContent);
+      }
+    });
+  }
+  initRedisCodeModal();
+  initRedisAddModal();
+  renderRedisOpsCards([]);
+}
+
+function openRedisAddModal() {
+  const modal = $('redis-add-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  const problemEl = $('redis-add-problem');
+  if (problemEl) problemEl.value = '';
+  const statusEl = $('redis-add-status');
+  if (statusEl) statusEl.textContent = '';
+}
+
+let _redisAddGeneratePollTimer = null;
+
+function closeRedisAddModal() {
+  if (_redisAddGeneratePollTimer) {
+    clearInterval(_redisAddGeneratePollTimer);
+    _redisAddGeneratePollTimer = null;
+  }
+  const modal = $('redis-add-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function initRedisAddModal() {
+  const addBtn = $('btn-redis-ops-add');
+  const closeBtn = $('redis-add-modal-close');
+  const cancelBtn = $('redis-add-cancel');
+  const backdrop = document.getElementById('redis-add-modal-backdrop');
+  const form = $('redis-add-form');
+  if (!addBtn || !form || addBtn.dataset.bound === '1') return;
+  addBtn.dataset.bound = '1';
+  addBtn.addEventListener('click', openRedisAddModal);
+  if (closeBtn) closeBtn.addEventListener('click', closeRedisAddModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeRedisAddModal);
+  if (backdrop) backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeRedisAddModal(); });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const problem = $('redis-add-problem').value?.trim();
+    const statusEl = $('redis-add-status');
+    const submitBtn = $('redis-add-submit');
+    if (!problem) {
+      statusEl.textContent = '请填写问题名称';
+      statusEl.className = 'text-sm text-red-600';
+      return;
+    }
+    submitBtn.disabled = true;
+    statusEl.textContent = '提交中...';
+    statusEl.className = 'text-sm text-gray-600';
+    try {
+      const res = await fetch(API_BASE + '/api/redis-ops/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ problem }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        const initialCount = (REDIS_OPS_LAST_PROBLEMS || []).length;
+        statusEl.textContent = '已提交。正在检测新案例（约 1–3 分钟）…';
+        statusEl.className = 'text-sm text-green-600';
+        const maxPolls = 12;
+        let pollCount = 0;
+        const doPoll = async () => {
+          pollCount++;
+          try {
+            if (typeof loadRedisOpsStatus === 'function') await loadRedisOpsStatus();
+            const current = REDIS_OPS_LAST_PROBLEMS || [];
+            if (current.length > initialCount) {
+              if (_redisAddGeneratePollTimer) {
+                clearInterval(_redisAddGeneratePollTimer);
+                _redisAddGeneratePollTimer = null;
+              }
+              statusEl.textContent = '新案例已生成，请查看列表。';
+              submitBtn.disabled = false;
+              return;
+            }
+          } catch (err) {}
+          if (pollCount >= maxPolls) {
+            if (_redisAddGeneratePollTimer) {
+              clearInterval(_redisAddGeneratePollTimer);
+              _redisAddGeneratePollTimer = null;
+            }
+            statusEl.textContent = '超时。请稍后手动点击刷新列表查看。';
+            submitBtn.disabled = false;
+          }
+        };
+        doPoll();
+        _redisAddGeneratePollTimer = setInterval(doPoll, 15000);
+      } else {
+        statusEl.textContent = data.detail || '提交失败';
+        statusEl.className = 'text-sm text-red-600';
+        submitBtn.disabled = false;
+      }
+    } catch (err) {
+      statusEl.textContent = 'Error: ' + (err.message || err);
+      statusEl.className = 'text-sm text-red-600';
+      submitBtn.disabled = false;
+    }
+  });
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initMysqlOpsCardsOnLoad);
+  document.addEventListener('DOMContentLoaded', () => {
+    initMysqlOpsCardsOnLoad();
+    initRedisOpsOnLoad();
+  });
 } else {
   initMysqlOpsCardsOnLoad();
+  initRedisOpsOnLoad();
 }
