@@ -19,6 +19,7 @@
       <button id="tab-deploy" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="deploy">Deploy</button>
       <button id="tab-monitor" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="monitor">Monitor</button>
       <button id="tab-perftest" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="perftest">Perf Test</button>
+      <button id="tab-mysqlops" class="tab-btn px-4 py-2 text-gray-500 hover:text-gray-700" data-tab="mysqlops">MySQL Ops</button>
     </div>
 
     <!-- Tab: Config -->
@@ -66,6 +67,10 @@
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">部署路径</label>
               <input type="text" id="app-server-deploy-path" placeholder="/opt/dex" value="/opt/dex" class="w-full border rounded px-3 py-2">
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">MySQL Ops 代码路径（目标服务器）</label>
+              <input type="text" id="app-server-mysql-ops-path" placeholder="/opt/dex/mysql-ops-learning" value="/opt/dex/mysql-ops-learning" class="w-full border rounded px-3 py-2">
             </div>
           </div>
           <h3 class="text-lg font-semibold mt-6">3. 项目代码仓库</h3>
@@ -148,6 +153,66 @@
         </div>
 
         <div id="perftest-result" class="mt-4 hidden"></div>
+      </div>
+    </div>
+
+    <!-- Tab: MySQL Ops -->
+    <div id="panel-mysqlops" class="tab-panel hidden">
+      <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-xl font-semibold mb-4">MySQL 运维学习</h2>
+        <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 MySQL 运维问题，并通过工具模拟与验证。</p>
+        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="mysql-ops-status"></div>
+        <h3 class="font-medium mb-3">问题列表（点击展开查看业务场景与详情）</h3>
+        <div id="mysql-ops-cards" class="space-y-2">
+          <!-- 静态兜底：JS 未加载或失败时仍显示列表 -->
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden">
+            <button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="0">
+              <span class="font-semibold text-indigo-700">01 最大连接数耗尽</span>
+              <span class="mysql-ops-chevron text-gray-400 text-sm">▼</span>
+            </button>
+            <div class="mysql-ops-body border-t border-gray-100">
+              <div class="p-4 space-y-4">
+                <div class="p-3 bg-sky-50 border-l-4 border-sky-400 rounded text-sm text-gray-700">
+                  <span class="font-medium text-sky-800 block mb-1">真实业务场景</span>
+                  <p>电商平台大促秒杀：双11 活动开始瞬间每秒 5000+ 请求，应用每次新建 MySQL 连接且未归还，max_connections=500 约 10 秒后新请求全部报 Too many connections，用户界面显示「系统繁忙，请稍后再试」，活动被迫暂停。</p>
+                </div>
+                <div class="space-y-3 text-sm">
+                  <div class="flex gap-2"><span class="shrink-0 px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-xs">1</span><div><span class="font-medium text-gray-700">业务场景：</span><span class="text-gray-600">应用未正确复用连接，不断创建新连接而不释放。</span></div></div>
+                  <div class="flex gap-2"><span class="shrink-0 px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs">2</span><div><span class="font-medium text-gray-700">现象：</span><span class="text-gray-600">新连接报错 Too many connections；Threads_connected 接近 max_connections。</span></div></div>
+                  <div class="flex gap-2"><span class="shrink-0 px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs">3</span><div><span class="font-medium text-gray-700">问题：</span><span class="text-gray-600">MySQL 连接数达到上限。</span></div></div>
+                  <div class="flex gap-2"><span class="shrink-0 px-2 py-0.5 rounded bg-green-100 text-green-800 text-xs">4</span><div><span class="font-medium text-gray-700">解决方案建议：</span><span class="text-gray-600">调整 max_connections；使用连接池；修复连接泄漏。</span></div></div>
+                </div>
+                <div class="flex flex-wrap gap-2 pt-2 border-t">
+                  <button class="mysql-ops-run-btn px-3 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700" data-problem="01-max-connections" data-action="reproduce">Run: 模拟耗尽</button>
+                  <button class="mysql-ops-run-btn px-3 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700" data-problem="01-max-connections" data-action="monitor">Run: 查看状态</button>
+                  <a href="#" class="mysql-case-link text-sky-600 hover:text-sky-800 text-sm ml-2" data-problem="01-max-connections">查看完整案例</a>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden"><button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="1"><span class="font-semibold text-indigo-700">02 慢查询监控</span><span class="mysql-ops-chevron text-gray-400 text-sm">▼</span></button><div class="mysql-ops-body hidden border-t border-gray-100"><div class="p-4"><a href="#" class="mysql-case-link text-sky-600 text-sm" data-problem="02-slow-log">查看完整案例</a></div></div></div>
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden"><button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="2"><span class="font-semibold text-indigo-700">03 大事务</span><span class="mysql-ops-chevron text-gray-400 text-sm">▼</span></button><div class="mysql-ops-body hidden border-t border-gray-100"><div class="p-4"><a href="#" class="mysql-case-link text-sky-600 text-sm" data-problem="03-large-transaction">查看完整案例</a></div></div></div>
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden"><button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="3"><span class="font-semibold text-indigo-700">04 大表问题</span><span class="mysql-ops-chevron text-gray-400 text-sm">▼</span></button><div class="mysql-ops-body hidden border-t border-gray-100"><div class="p-4"><a href="#" class="mysql-case-link text-sky-600 text-sm" data-problem="04-large-table">查看完整案例</a></div></div></div>
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden"><button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="4"><span class="font-semibold text-indigo-700">05 死锁</span><span class="mysql-ops-chevron text-gray-400 text-sm">▼</span></button><div class="mysql-ops-body hidden border-t border-gray-100"><div class="p-4"><a href="#" class="mysql-case-link text-sky-600 text-sm" data-problem="05-deadlock">查看完整案例</a></div></div></div>
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden"><button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="5"><span class="font-semibold text-indigo-700">06 锁等待超时</span><span class="mysql-ops-chevron text-gray-400 text-sm">▼</span></button><div class="mysql-ops-body hidden border-t border-gray-100"><div class="p-4"><a href="#" class="mysql-case-link text-sky-600 text-sm" data-problem="06-lock-wait-timeout">查看完整案例</a></div></div></div>
+          <div class="border rounded-lg bg-white border-l-4 border-indigo-500 shadow-sm overflow-hidden"><button type="button" class="mysql-ops-toggle w-full text-left px-4 py-3 flex items-center justify-between hover:bg-indigo-50" data-idx="6"><span class="font-semibold text-indigo-700">07 索引使用不当</span><span class="mysql-ops-chevron text-gray-400 text-sm">▼</span></button><div class="mysql-ops-body hidden border-t border-gray-100"><div class="p-4"><a href="#" class="mysql-case-link text-sky-600 text-sm" data-problem="07-index-misuse">查看完整案例</a></div></div></div>
+        </div>
+        <div id="mysql-case-modal" class="fixed inset-0 z-50 hidden">
+          <div class="absolute inset-0 bg-black/50 flex items-center justify-center p-4" id="mysql-case-modal-backdrop">
+            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col">
+            <div class="flex justify-between items-center p-4 border-b">
+              <h3 id="mysql-case-modal-title" class="font-semibold">完整业务案例</h3>
+              <button id="mysql-case-modal-close" class="text-gray-500 hover:text-gray-700">✕</button>
+            </div>
+            <pre id="mysql-case-modal-body" class="p-4 overflow-auto text-sm whitespace-pre-wrap flex-1 font-sans"></pre>
+            </div>
+          </div>
+        </div>
+        <div class="mt-6 border-t pt-4">
+          <h3 class="font-medium mb-2">执行输出</h3>
+          <p class="text-xs text-gray-500 mb-1">点击上方 Run 按钮后，工具输出将显示于此。</p>
+          <pre id="mysql-ops-output" class="p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 font-mono whitespace-pre-wrap min-h-[80px] hidden"></pre>
+        </div>
       </div>
     </div>
   </div>

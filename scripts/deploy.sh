@@ -82,7 +82,7 @@ else
   PROJECT_ROOT="$CLONE_DIR"
 fi
 
-# Detect project type: DEX (apps/) or simple Go (main.go)
+# Detect project type: DEX (apps/), simple Go (main.go), or cmd-style Go (cmd/main.go)
 PROJECT_TYPE=""
 if [ -d "$PROJECT_ROOT/apps" ]; then
   DEX_APPS="$PROJECT_ROOT/apps"
@@ -95,8 +95,11 @@ elif [ -d "$PROJECT_ROOT/dex_full/apps" ]; then
 elif [ -f "$PROJECT_ROOT/main.go" ] && [ -f "$PROJECT_ROOT/go.mod" ]; then
   MAKE_DIR="$PROJECT_ROOT"
   PROJECT_TYPE="simple"
+elif [ -f "$PROJECT_ROOT/cmd/main.go" ] && [ -f "$PROJECT_ROOT/go.mod" ]; then
+  MAKE_DIR="$PROJECT_ROOT"
+  PROJECT_TYPE="go-cmd"
 else
-  echo "ERROR: Cannot find apps/ (DEX) or main.go+go.mod (simple Go) under $PROJECT_ROOT"
+  echo "ERROR: Cannot find apps/ (DEX), main.go+go.mod (simple Go), or cmd/main.go+go.mod (Go cmd project) under $PROJECT_ROOT"
   exit 1
 fi
 
@@ -140,6 +143,13 @@ elif [ "$PROJECT_TYPE" = "simple" ]; then
   }
   # Copy config dir if exists
   [ -d "$MAKE_DIR/config" ] && cp -r "$MAKE_DIR/config" "$MAKE_DIR/build/" 2>/dev/null || true
+elif [ "$PROJECT_TYPE" = "go-cmd" ]; then
+  echo "Building (Go cmd project)..."
+  mkdir -p "$MAKE_DIR/build"
+  (cd "$MAKE_DIR" && go build -o build/main ./cmd 2>/dev/null) || {
+    echo "Build failed (go build ./cmd)."
+    exit 1
+  }
 fi
 
 # Deploy to server via rsync
@@ -186,6 +196,18 @@ rsync -az --delete -e "$RSYNC_SSH" \
   exit 1
 }
 
+# For cmd-style projects (e.g. mysql-ops-learning), also sync source code so remote can run: go run ./cmd ...
+if [ "$PROJECT_TYPE" = "go-cmd" ]; then
+  REMOTE_SRC_DIR="${APP_DEPLOY_PATH}/${REPO_NAME}"
+  $SSH_CMD "mkdir -p ${REMOTE_SRC_DIR}" 2>/dev/null || true
+  rsync -az --delete -e "$RSYNC_SSH" \
+    --exclude ".git" --exclude "build" --exclude ".idea" --exclude ".vscode" \
+    "$MAKE_DIR/" "${APP_SSH_USER}@${APP_HOST}:${REMOTE_SRC_DIR}/" || {
+    echo "Rsync source failed. Ensure SSH key auth: ssh-copy-id ${APP_SSH_USER}@${APP_HOST}"
+    exit 1
+  }
+fi
+
 # Copy model if exists
 [ -d "$MAKE_DIR/model" ] && rsync -az -e "$RSYNC_SSH" \
   "$MAKE_DIR/model/" "${APP_SSH_USER}@${APP_HOST}:${APP_DEPLOY_PATH}/model/" 2>/dev/null || true
@@ -209,7 +231,7 @@ done
 echo Started. Check /tmp/*.log
 EOF
 chmod +x $APP_DEPLOY_PATH/start.sh"
-else
+elif [ "$PROJECT_TYPE" = "simple" ]; then
   # Simple project: DSN file is rsync'd above; start.sh reads it if present
   MYSQL_EXPORT=""
   if [ -n "$MYSQL_DSN_B64" ]; then
@@ -222,6 +244,15 @@ cd $APP_DEPLOY_PATH/build
 ${MYSQL_EXPORT}pkill -f 'build/main' 2>/dev/null || fuser -k 8080/tcp 2>/dev/null || true
 nohup $APP_DEPLOY_PATH/build/main > /tmp/main.log 2>&1 &
 echo Started. Check /tmp/main.log
+EOF
+chmod +x $APP_DEPLOY_PATH/start.sh"
+else
+  # Go cmd projects are usually CLI/tooling projects; do not force a long-running process.
+  $SSH_CMD "cat > $APP_DEPLOY_PATH/start.sh << EOF
+#!/bin/bash
+echo 'Go cmd project deployed. No persistent service started.'
+echo 'Use commands from source dir, e.g.:'
+echo '  cd $APP_DEPLOY_PATH/$REPO_NAME && go run ./cmd run 01-max-connections reproduce'
 EOF
 chmod +x $APP_DEPLOY_PATH/start.sh"
 fi

@@ -66,6 +66,8 @@ performance/
 2. **部署**：从 GitHub 克隆 → 编译 → 生成配置（项目连接 MySQL/Redis/Kafka）→ rsync 到项目服务器
 3. **监控**：通过 SSH 获取项目服务器的 CPU、内存
 4. **压测**：对 Gateway 接口做负载测试
+5. **MySQL Ops**：运行 mysql-ops-learning 工具，模拟连接数、慢查询、大事务等问题（需同级目录有 mysql-ops-learning 项目及 Go 环境）
+6. **MySQL 案例**：`mysql-cases/` 目录存放各问题的真实业务场景设计，便于理解技术概念对业务的影响
 
 ## 配置说明
 
