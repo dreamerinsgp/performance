@@ -137,7 +137,12 @@
           <label class="block text-sm font-medium text-gray-700 mb-1">SSH 密码（可选，首次部署时填写可自动配置免密，不保存）</label>
           <input type="password" id="deploy-ssh-password" placeholder="未配置免密时填写，成功后后续无需再填" class="w-full max-w-md border rounded px-3 py-2">
         </div>
-        <button id="btn-deploy" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Deploy</button>
+        <div class="flex gap-2 flex-wrap">
+          <button id="btn-deploy" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Deploy</button>
+          <button id="btn-analyze-project" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">分析项目场景</button>
+          <button id="btn-analyze-project-ai" class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700" title="使用 project-scenarios-analyzer 技能生成，需配置 OpenClaw">分析业务场景（AI）</button>
+        </div>
+        <p id="analyze-project-status" class="mt-2 text-sm text-gray-500"></p>
         <pre id="deploy-output" class="mt-4 p-4 bg-gray-900 text-green-400 rounded text-sm overflow-auto max-h-64 hidden"></pre>
       </div>
     </div>
@@ -205,6 +210,13 @@
       <div class="bg-white rounded-lg shadow p-6">
         <h2 class="text-xl font-semibold mb-4">MySQL 运维学习</h2>
         <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 MySQL 运维问题，并通过工具模拟与验证。</p>
+        <div id="mysql-project-scenarios-section" class="mb-6 hidden">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">本项目的 MySQL 应用场景</h3>
+            <span class="text-xs text-gray-500">来自已部署项目代码分析，点击展开</span>
+          </div>
+          <div id="mysql-project-scenarios-content" class="space-y-2"></div>
+        </div>
         <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="mysql-ops-status"></div>
         <div class="mb-6 p-4 border rounded-lg bg-slate-50 border-slate-200">
           <div class="flex items-center justify-between mb-2">
@@ -354,6 +366,13 @@
       <div class="bg-white rounded-lg shadow p-6">
         <h2 class="text-xl font-semibold mb-4">Redis 运维学习</h2>
         <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 Redis 运维问题，并通过工具查看状态。</p>
+        <div id="redis-project-scenarios-section" class="mb-6 hidden">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">本项目的 Redis 应用场景</h3>
+            <span class="text-xs text-gray-500">来自已部署项目代码分析，点击展开</span>
+          </div>
+          <div id="redis-project-scenarios-content" class="space-y-2"></div>
+        </div>
         <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="redis-ops-status"></div>
         <div class="flex items-center justify-between mb-3">
           <h3 class="font-medium">问题列表</h3>
@@ -378,6 +397,13 @@
       <div class="bg-white rounded-lg shadow p-6">
         <h2 class="text-xl font-semibold mb-4">Kafka 运维学习</h2>
         <p class="text-sm text-gray-500 mb-4">按「业务场景 → 现象 → 问题 → 解决方案」理解常见 Kafka 运维问题。Infra Config 中配置 Kafka 后可用「测试 Kafka 连接」验证。</p>
+        <div id="kafka-project-scenarios-section" class="mb-6 hidden">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-medium">本项目的 Kafka 应用场景</h3>
+            <span class="text-xs text-gray-500">来自已部署项目代码分析，点击展开</span>
+          </div>
+          <div id="kafka-project-scenarios-content" class="space-y-2"></div>
+        </div>
         <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm" id="kafka-ops-status"></div>
         <div class="flex items-center justify-between mb-3">
           <h3 class="font-medium">问题列表</h3>

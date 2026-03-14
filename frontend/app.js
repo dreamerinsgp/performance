@@ -129,10 +129,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     } else if (btn.dataset.tab === 'mysqlops') {
       loadMysqlOpsStatus();
       updateMysqlOpsActions();
+      loadProjectScenarios();
     } else if (btn.dataset.tab === 'redisops') {
       loadRedisOpsStatus();
+      loadProjectScenarios();
     } else if (btn.dataset.tab === 'kafkaops') {
       loadKafkaOpsStatus();
+      loadProjectScenarios();
     } else {
       clearInterval(metricsRefreshInterval);
       metricsRefreshInterval = null;
@@ -283,11 +286,113 @@ $('btn-deploy').addEventListener('click', async () => {
     $('deploy-output').textContent = (data.stdout || '') + (data.stderr ? '\n\nSTDERR:\n' + data.stderr : '');
     if (data.ok) $('deploy-output').classList.add('text-green-400');
     else $('deploy-output').classList.add('text-red-400');
+    if (data.ok) loadProjectScenarios();
   } catch (e) {
     $('deploy-output').textContent = 'Error: ' + e.message;
   }
   $('btn-deploy').disabled = false;
 });
+
+// Project scenarios - 本项目的 MySQL/Redis/Kafka 应用场景（问题列表格式，可展开）
+const PROJECT_SCENARIOS_COLORS = {
+  mysql: { border: 'border-indigo-500', hover: 'hover:bg-indigo-50', text: 'text-indigo-700' },
+  redis: { border: 'border-red-500', hover: 'hover:bg-red-50', text: 'text-red-700' },
+  kafka: { border: 'border-emerald-500', hover: 'hover:bg-emerald-50', text: 'text-emerald-700' },
+};
+
+function renderProjectScenarioCard(key, idx, item, total) {
+  const c = PROJECT_SCENARIOS_COLORS[key] || PROJECT_SCENARIOS_COLORS.mysql;
+  const num = String(idx + 1).padStart(2, '0');
+  const refs = item.tables || item.keys || item.topics || item.files || [];
+  const refLabel = item.tables ? '涉及表' : item.keys ? '涉及键' : item.topics ? '涉及 Topic' : (item.files ? '涉及文件' : '涉及');
+  return `
+    <div class="border rounded-lg bg-white border-l-4 ${c.border} shadow-sm overflow-hidden project-scenario-card">
+      <button type="button" class="project-scenario-toggle w-full text-left px-4 py-3 flex items-center justify-between ${c.hover}" data-key="${key}" data-idx="${idx}">
+        <span class="font-semibold ${c.text}">${num} ${item.scenario || '场景'}</span>
+        <span class="project-scenario-chevron text-gray-400 text-sm">▼</span>
+      </button>
+      <div class="project-scenario-body border-t border-gray-100 hidden">
+        <div class="p-4 space-y-3">
+          <div class="p-3 bg-sky-50 border-l-4 border-sky-400 rounded text-sm text-gray-700">
+            <span class="font-medium text-sky-800 block mb-1">应用场景</span>
+            <p>${item.usage || '-'}</p>
+          </div>
+          ${refs.length ? `
+          <div class="flex gap-2">
+            <span class="shrink-0 px-2 py-0.5 rounded bg-blue-100 text-blue-800 text-xs font-medium">${refLabel}</span>
+            <div class="text-gray-600 text-sm">${refs.slice(0, 8).join(', ')}${refs.length > 8 ? '...' : ''}</div>
+          </div>
+          ` : ''}
+          ${item.risk ? `
+          <div class="flex gap-2">
+            <span class="shrink-0 px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium">潜在风险</span>
+            <div class="text-amber-700 text-sm">${item.risk}</div>
+          </div>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function loadProjectScenarios() {
+  const sections = {
+    mysql: { section: $('mysql-project-scenarios-section'), content: $('mysql-project-scenarios-content') },
+    redis: { section: $('redis-project-scenarios-section'), content: $('redis-project-scenarios-content') },
+    kafka: { section: $('kafka-project-scenarios-section'), content: $('kafka-project-scenarios-content') },
+  };
+  for (const k of Object.keys(sections)) {
+    const s = sections[k];
+    if (!s.section || !s.content) continue;
+    s.section.classList.add('hidden');
+    s.content.innerHTML = '';
+  }
+  try {
+    const res = await fetch(API_BASE + '/api/project-scenarios');
+    const data = await res.json();
+    if (!data.exists || !data.scenarios) return;
+    const sc = data.scenarios;
+    const render = (key, items) => {
+      const s = sections[key];
+      if (!s || !items || items.length === 0) return;
+      s.section.classList.remove('hidden');
+      s.content.innerHTML = items.map((item, i) => renderProjectScenarioCard(key, i, item, items.length)).join('');
+      s.content.querySelectorAll('.project-scenario-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const card = btn.closest('.project-scenario-card');
+          const body = card?.querySelector('.project-scenario-body');
+          const chevron = card?.querySelector('.project-scenario-chevron');
+          if (body && chevron) {
+            body.classList.toggle('hidden');
+            chevron.textContent = body.classList.contains('hidden') ? '▼' : '▲';
+          }
+        });
+      });
+    };
+    render('mysql', sc.mysql);
+    render('redis', sc.redis);
+    render('kafka', sc.kafka);
+  } catch (_) {}
+}
+
+async function analyzeProjectScenarios(useAgent) {
+  const statusEl = $('analyze-project-status');
+  if (statusEl) statusEl.textContent = '分析中...';
+  try {
+    const res = await fetch(API_BASE + '/api/project-scenarios/analyze?use_agent=' + (useAgent ? 'true' : 'false'));
+    const data = await res.json();
+    if (statusEl) statusEl.textContent = data.message || (data.ok ? '完成' : '失败');
+    if (data.ok && data.scenarios) loadProjectScenarios();
+    else if (data.ok && !data.scenarios && useAgent) {
+      if (statusEl) statusEl.textContent += ' 请稍后刷新页面查看。';
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+$('btn-analyze-project')?.addEventListener('click', () => analyzeProjectScenarios(false));
+$('btn-analyze-project-ai')?.addEventListener('click', () => analyzeProjectScenarios(true));
 
 // Metrics - 防缓存，每次请求最新数据；Monitor 激活时每 15 秒自动刷新
 $('btn-refresh-metrics')?.addEventListener('click', () => fetchMetrics());

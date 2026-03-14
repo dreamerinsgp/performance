@@ -1,0 +1,29 @@
+{
+  "project_name": "fun_dex_from_zero_to_hero",
+  "branch": "main",
+  "analyzed_at": "2025-03-15T12:00:00Z",
+  "mysql": [
+    {
+      "scenario": "用户订单存储",
+      "usage": "GORM 存储交易订单、持仓信息",
+      "tables": ["orders", "holdings"],
+      "risk": "高并发下单可能导致锁等待"
+    }
+  ],
+  "redis": [
+    {
+      "scenario": "Token 价格缓存",
+      "usage": "缓存 K 线、最新价，减轻数据库压力",
+      "keys": ["price:*", "kline:*"],
+      "risk": "热 key 可能导致单节点压力"
+    }
+  ],
+  "kafka": [
+    {
+      "scenario": "交易事件流",
+      "usage": "消费链上交易消息，更新订单状态",
+      "topics": ["trade_events"],
+      "risk": "消费 lag 可能导致数据延迟"
+    }
+  ]
+}

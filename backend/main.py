@@ -499,6 +499,222 @@ def _discover_perftest_endpoints() -> Dict[str, Any]:
     }
 
 
+PROJECT_SCENARIOS_FILE = PERF_DIR / "config" / "project_scenarios.json"
+
+
+# 真实业务场景：路径模式 -> (场景名, 用途描述, 风险)
+_MYSQL_SCENARIO_RULES = [
+    ("model/solmodel/blockmodel", "区块数据处理", "Consumer 消费链上区块后落库，用于断点续传与状态追踪", "高并发写入阻塞"),
+    ("model/solmodel/pairmodel", "交易对信息存储", "存储 DEX 交易对（Pair）元数据，供行情与交易服务查询", "大表需索引"),
+    ("model/solmodel/tokenmodel", "代币元数据存储", "存储代币 CA、名称、精度等，供行情与下单使用", ""),
+    ("model/solmodel/trademodel", "链上交易记录", "存储链上成交记录，供 K 线、成交列表等查询", "高写入 QPS"),
+    ("model/trademodel/tradeordermodel", "限价单订单", "用户挂单数据，买卖队列、价格、数量", "锁竞争、大表"),
+    ("model/trademodel/tradeorderlogmodel", "订单操作日志", "订单创建、成交、取消等操作流水", ""),
+]
+
+_REDIS_SCENARIO_RULES = [
+    ("trade/internal/ticker", "链上交易检查锁", "CheckOnChainTxRedisKey 分布式锁，防止同一笔链上交易重复提交", "锁超时影响撮合"),
+    ("trade/internal/proclimitorder/tokenpricelimit", "限价单价格队列与锁", "Redis List 存买单/卖单队列，锁保护价格触发时的并发处理", "热 key、队列堆积"),
+    ("pkg/xredis", "分布式锁工具", "xredis.Lock/MustLock 封装，供 ticker、tokenpricelimit 等使用", ""),
+]
+
+_KAFKA_SCENARIO_RULES = [
+    ("consumer/internal/logic/mq/producer", "Producer 发送链上交易", "Consumer 服务将链上成交事件发送到 Kafka，供 market 消费", "发送失败影响 K 线"),
+    ("market/internal/mqs/consumers/trade_consumer", "Consumer 消费交易事件", "解析 TradeWithPair 消息，更新 K 线、推送 WebSocket", "lag 导致 K 线延迟"),
+]
+
+
+def _match_scenario_rules(rules: List[Tuple[str, str, str, str]], files: List[str]) -> List[Dict[str, Any]]:
+    """按规则将文件分组，生成「真实业务场景 + 对应代码位置」。"""
+    result: List[Dict[str, Any]] = []
+    used = set()
+    for prefix, scenario, usage, risk in rules:
+        matched = [f for f in files if prefix in f.replace("\\", "/")]
+        if not matched:
+            continue
+        for f in matched:
+            used.add(f)
+        result.append({
+            "scenario": scenario,
+            "usage": usage,
+            "files": sorted(matched)[:10],
+            "risk": risk or ("高并发/锁竞争需关注" if "lock" in prefix.lower() or "order" in prefix.lower() else ""),
+        })
+    remainder = [f for f in files if f not in used]
+    if remainder and result:
+        result.append({
+            "scenario": "服务层依赖",
+            "usage": "ServiceContext、配置、连接初始化",
+            "files": sorted(remainder)[:8],
+            "risk": "",
+        })
+    elif remainder:
+        result.append({
+            "scenario": "业务持久化",
+            "usage": "模型与持久化层",
+            "files": sorted(remainder)[:10],
+            "risk": "",
+        })
+    return result
+
+
+def _scan_project_for_middleware(project_root: Path) -> Dict[str, Any]:
+    """Scan Go project for MySQL, Redis, Kafka usage. Returns structured findings with scenario text."""
+    mysql_files: List[str] = []
+    redis_files: List[str] = []
+    kafka_files: List[str] = []
+    mysql_patterns = [
+        "gorm.io/gorm", "gorm.io/driver/mysql", "database/sql",
+        "sql.Open", "mysql.", "go-sql-driver/mysql",
+    ]
+    redis_patterns = [
+        "redis/go-redis", "go-redis/redis", "gomodule/redigo",
+        "zeromicro/go-zero/core/stores/redis", "redis.NewClient", "redis.Options",
+        "xredis.Lock", "xredis.MustLock",
+    ]
+    kafka_patterns = [
+        "sarama", "kafka-go", "segmentio/kafka-go",
+        "confluent-kafka-go", "IBM/sarama",
+        "kafka.NewReader", "sarama.NewConsumer",
+    ]
+    try:
+        for f in project_root.rglob("*.go"):
+            if "vendor" in str(f) or ".git" in str(f):
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+                rel = str(f.relative_to(project_root))
+                for p in mysql_patterns:
+                    if p in text:
+                        mysql_files.append(rel)
+                        break
+                for p in redis_patterns:
+                    if p in text:
+                        redis_files.append(rel)
+                        break
+                for p in kafka_patterns:
+                    if p in text:
+                        kafka_files.append(rel)
+                        break
+            except Exception:
+                continue
+        mysql_files = sorted(set(mysql_files))[:20]
+        redis_files = sorted(set(redis_files))[:20]
+        kafka_files = sorted(set(kafka_files))[:20]
+    except Exception:
+        pass
+    result: Dict[str, Any] = {"mysql": [], "redis": [], "kafka": []}
+    if mysql_files:
+        result["mysql"] = _match_scenario_rules(_MYSQL_SCENARIO_RULES, mysql_files)
+    if redis_files:
+        result["redis"] = _match_scenario_rules(_REDIS_SCENARIO_RULES, redis_files)
+    if kafka_files:
+        result["kafka"] = _match_scenario_rules(_KAFKA_SCENARIO_RULES, kafka_files)
+    return result
+
+
+def _analyze_project_scenarios(use_agent: bool = False, project_path_override: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Analyze deployed project for MySQL/Redis/Kafka scenarios.
+    use_agent=True: invoke OpenClaw to generate richer business scenarios.
+    project_path_override: for testing, use this path instead of workspace.
+    """
+    project_root = None
+    repo_name = "project"
+    branch = "main"
+    if project_path_override:
+        p = Path(project_path_override)
+        if p.exists() and p.is_dir():
+            project_root = p
+            repo_name = p.name
+    if not project_root:
+        pair = _get_deployed_project_root()
+        if not pair:
+            return {"ok": False, "message": "请先完成部署。", "scenarios": None}
+        project_root, _ = pair
+        config = get_infra_config() or {}
+        github = config.get("github") or {}
+        repo_name = Path((github.get("repo_url") or "").rstrip("/")).name
+        if repo_name.endswith(".git"):
+            repo_name = repo_name[:-4]
+        branch = github.get("branch") or "main"
+    config = get_infra_config() or {}
+    from datetime import datetime, timezone
+    analyzed_at = datetime.now(timezone.utc).isoformat()
+    scanned = _scan_project_for_middleware(project_root)
+    if use_agent:
+        openclaw = config.get("openclaw") or {}
+        base_url = (openclaw.get("gateway_url") or "http://127.0.0.1:18789").rstrip("/")
+        token = (openclaw.get("hooks_token") or "").strip()
+        if token:
+            import httpx
+            abs_path = str(project_root.resolve())
+            out_path = str(PROJECT_SCENARIOS_FILE.resolve())
+            message = (
+                "请使用 project-scenarios-analyzer 技能，分析项目并生成业务场景。\n\n"
+                f"**参数：**\n"
+                f"- PROJECT_PATH: {abs_path}\n"
+                f"- OUTPUT_PATH: {out_path}\n"
+                f"- PROJECT_NAME: {repo_name}\n"
+                f"- BRANCH: {branch}\n\n"
+                "**要求：** 严格按 Skill 中的路径规则分组，输出格式必须包含 scenario、usage、files、risk。"
+                " 将 JSON 写入 OUTPUT_PATH。"
+            )
+            try:
+                with httpx.Client(timeout=60.0) as client:
+                    r = client.post(
+                        f"{base_url}/hooks/agent",
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                        json={
+                            "message": message,
+                            "name": "project-scenarios-analyzer",
+                            "sessionKey": f"hook:project-scenarios:{hash(abs_path) % 100000:05d}",
+                            "deliver": False,
+                            "timeoutSeconds": 300,
+                        },
+                    )
+                if r.status_code in (200, 202):
+                    return {"ok": True, "message": "Agent 已启动，请稍后刷新查看。", "scenarios": None}
+            except Exception:
+                pass
+    data = {
+        "project_name": repo_name,
+        "branch": branch,
+        "analyzed_at": analyzed_at,
+        "mysql": scanned.get("mysql", []),
+        "redis": scanned.get("redis", []),
+        "kafka": scanned.get("kafka", []),
+    }
+    PROJECT_SCENARIOS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PROJECT_SCENARIOS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "message": "分析完成。", "scenarios": data}
+
+
+@app.get("/api/project-scenarios")
+def get_project_scenarios():
+    """Get project-specific MySQL/Redis/Kafka scenarios (from last analyze)."""
+    if not PROJECT_SCENARIOS_FILE.exists():
+        return {"exists": False, "scenarios": None}
+    try:
+        data = json.loads(PROJECT_SCENARIOS_FILE.read_text(encoding="utf-8"))
+        return {"exists": True, "scenarios": data}
+    except Exception:
+        return {"exists": False, "scenarios": None}
+
+
+@app.post("/api/project-scenarios/analyze")
+def analyze_project_scenarios(
+    use_agent: bool = Query(False, description="Use OpenClaw agent for richer scenarios"),
+    project_path: Optional[str] = Query(None, description="Override: use this path for testing (e.g. /path/to/local/project)"),
+):
+    """
+    Analyze deployed project for MySQL/Redis/Kafka application scenarios.
+    use_agent=true: invoke OpenClaw to generate customized business scenarios.
+    project_path: optional override for testing with local path.
+    """
+    return _analyze_project_scenarios(use_agent=use_agent, project_path_override=project_path)
+
+
 @app.get("/api/perftest/discover")
 def discover_perftest_endpoints():
     """List all testable projects and HTTP endpoints (from gateway.yaml or preset)."""

@@ -1,0 +1,133 @@
+{
+  "project_name": "fun_dex_from_zero_to_hero",
+  "branch": "kafka_consumer_full",
+  "analyzed_at": "2026-03-14T19:20:00Z",
+  "mysql": [
+    {
+      "scenario": "区块数据处理",
+      "usage": "Consumer 消费链上区块后落库，用于断点续传与状态追踪",
+      "files": [
+        "model/solmodel/blockmodel.go",
+        "model/solmodel/blockmodel_gen.go"
+      ],
+      "risk": "高并发写入阻塞"
+    },
+    {
+      "scenario": "交易对信息存储",
+      "usage": "存储 DEX 交易对（Pair）元数据，供行情与交易服务查询",
+      "files": [
+        "model/solmodel/pairmodel.go",
+        "model/solmodel/pairmodel_gen.go"
+      ],
+      "risk": "大表需索引"
+    },
+    {
+      "scenario": "代币元数据存储",
+      "usage": "存储代币 CA、名称、精度等，供行情与下单使用",
+      "files": [
+        "model/solmodel/tokenmodel.go",
+        "model/solmodel/tokenmodel_gen.go"
+      ],
+      "risk": ""
+    },
+    {
+      "scenario": "链上交易记录",
+      "usage": "存储链上成交记录，供 K 线、成交列表等查询",
+      "files": [
+        "model/solmodel/trademodel.go",
+        "model/solmodel/trademodel_gen.go"
+      ],
+      "risk": "高写入 QPS"
+    },
+    {
+      "scenario": "限价单订单",
+      "usage": "用户挂单数据，买卖队列、价格、数量",
+      "files": [
+        "model/trademodel/tradeordermodel.go",
+        "model/trademodel/tradeordermodel_gen.go"
+      ],
+      "risk": "锁竞争、大表"
+    },
+    {
+      "scenario": "订单操作日志",
+      "usage": "订单创建、成交、取消等操作流水",
+      "files": [
+        "model/trademodel/tradeorderlogmodel.go",
+        "model/trademodel/tradeorderlogmodel_gen.go"
+      ],
+      "risk": "高并发/锁竞争需关注"
+    },
+    {
+      "scenario": "服务层依赖",
+      "usage": "ServiceContext、配置、连接初始化",
+      "files": [
+        "consumer/internal/svc/servicecontext.go",
+        "market/internal/svc/servicecontext.go",
+        "trade/internal/svc/servicecontext.go"
+      ],
+      "risk": ""
+    }
+  ],
+  "redis": [
+    {
+      "scenario": "链上交易检查锁",
+      "usage": "CheckOnChainTxRedisKey 分布式锁，防止同一笔链上交易重复提交",
+      "files": [
+        "trade/internal/ticker/ticker.go"
+      ],
+      "risk": "锁超时影响撮合"
+    },
+    {
+      "scenario": "限价单价格队列与锁",
+      "usage": "Redis List 存买单/卖单队列，锁保护价格触发时的并发处理",
+      "files": [
+        "trade/internal/proclimitorder/tokenpricelimit/tokenpricelimit.go"
+      ],
+      "risk": "热 key、队列堆积"
+    },
+    {
+      "scenario": "分布式锁工具",
+      "usage": "xredis.Lock/MustLock 封装，供 ticker、tokenpricelimit 等使用",
+      "files": [
+        "pkg/xredis/lock.go"
+      ],
+      "risk": ""
+    },
+    {
+      "scenario": "服务层依赖",
+      "usage": "ServiceContext、配置、连接初始化",
+      "files": [
+        "trade/internal/svc/servicecontext.go"
+      ],
+      "risk": ""
+    }
+  ],
+  "kafka": [
+    {
+      "scenario": "Producer 发送链上交易",
+      "usage": "Consumer 服务将链上成交事件发送到 Kafka，供 market 消费",
+      "files": [
+        "consumer/internal/logic/mq/producer.go"
+      ],
+      "risk": "发送失败影响 K 线"
+    },
+    {
+      "scenario": "Consumer 消费交易事件",
+      "usage": "解析 TradeWithPair 消息，更新 K 线、推送 WebSocket",
+      "files": [
+        "market/internal/mqs/consumers/trade_consumer.go"
+      ],
+      "risk": "lag 导致 K 线延迟"
+    },
+    {
+      "scenario": "服务层依赖",
+      "usage": "Kafka 连接、Consumer 框架、Topic 初始化",
+      "files": [
+        "market/internal/mqs/mqs.go",
+        "market/internal/mqs/consumers/kafka_go_consumer.go",
+        "pkg/kafka/ensure_topic.go"
+      ],
+      "risk": ""
+    }
+  ]
+}
