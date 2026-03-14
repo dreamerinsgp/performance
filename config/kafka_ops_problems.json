@@ -4,7 +4,8 @@
     "02-rebalance": "problems/rebalance",
     "03-connection-failure": "problems/connection",
     "04-topic-missing": "problems/topicmissing",
-    "05-message-ordering": "problems/messageordering"
+    "05-message-ordering": "problems/messageordering",
+    "06-duplicate-consumption": "problems/duplicateconsumption"
   },
   "problems": [
     {
@@ -61,6 +62,18 @@
       "solution": "1. 使用消息 key 确保同一业务实体进同一分区；2. 单分区可保证顺序但牺牲吞吐；3. 分区间用业务幂等和状态机处理。",
       "actions": [
         {"id": "info", "name": "理解分区与 key"}
+      ]
+    },
+    {
+      "id": "06-duplicate-consumption",
+      "name": "消息重复消费",
+      "scenario": "电商订单处理系统，Consumer 消费订单消息后处理业务逻辑（写入数据库/扣减库存），在 Offset 提交前进程崩溃或发生 Rebalance，重启后同一批消息被重新消费，导致重复扣款、重复发货。",
+      "phenomenon": "同一订单在日志中出现多次处理记录；数据库出现重复订单；业务方投诉重复扣款。",
+      "problem": "Kafka 默认 At-least-once 语义，处理完消息但未提交 Offset 时崩溃，重启后会重复消费；Rebalance 时也可能导致重复。",
+      "solution": "1. 业务层幂等：利用数据库唯一键或 Redis 去重；2. 手动提交 Offset，处理成功后再提交；3. 合理配置 session.timeout、max.poll.interval 避免频繁 Rebalance；4. 监控重复消费指标。",
+      "actions": [
+        {"id": "info", "name": "查看概念与原因"},
+        {"id": "analyze", "name": "分析 Offset 状态"}
       ]
     }
   ]

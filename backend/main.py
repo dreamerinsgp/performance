@@ -1532,6 +1532,64 @@ def get_kafka_ops_case(problem_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class KafkaOpsGenerateRequest(BaseModel):
+    """Request for AI-generated Kafka ops case."""
+    problem: str  # 问题名称，如「消息重复消费」「分区不均衡」
+
+
+@app.post("/api/kafka-ops/generate")
+def generate_kafka_ops_case(req: KafkaOpsGenerateRequest):
+    """Trigger OpenClaw agent to generate a new Kafka ops case from the given description."""
+    config = get_infra_config() or {}
+    openclaw = config.get("openclaw") or {}
+    base_url = (openclaw.get("gateway_url") or "http://127.0.0.1:18789").rstrip("/")
+    token = (openclaw.get("hooks_token") or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenClaw hooks token not configured. Add openclaw.gateway_url and openclaw.hooks_token in Infra Config.",
+        )
+    message = (
+        "请使用 kafka-ops-case-gen 技能，根据以下【问题】生成新的 Kafka 运维案例。\n\n"
+        f"问题：{req.problem}\n\n"
+        "要求：请你先根据该问题，自动生成【业务场景】【现象】【技术点】，再按 Skill 步骤生成完整案例。\n"
+        "步骤：1) 构思业务场景、现象、技术点 2) 创建 problems/<pkg>/ 3) 更新 cmd/main.go "
+        "4) 创建 performance/kafka-cases/<id>.md 5) 更新 performance/config/kafka_ops_problems.json "
+        "（在 problem_dirs 和 problems 中追加新条目）6) 执行 go build 验证。"
+    )
+    import httpx
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            r = client.post(
+                f"{base_url}/hooks/agent",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "message": message,
+                    "name": "kafka-ops-case-gen",
+                    "sessionKey": f"hook:kafka-ops:{hash(req.problem) % 100000:05d}",
+                    "deliver": False,
+                    "timeoutSeconds": 180,
+                },
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to reach OpenClaw gateway: {e}",
+        )
+    if r.status_code == 401:
+        raise HTTPException(status_code=400, detail="OpenClaw hooks token invalid or expired.")
+    if r.status_code not in (200, 202):
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenClaw returned {r.status_code}: {r.text[:200]}",
+        )
+    body = r.json() if r.content else {}
+    return {"ok": True, "runId": body.get("runId"), "message": "Agent 已启动，稍后刷新页面查看新案例。"}
+
+
 class KafkaOpsRunRequest(BaseModel):
     problem: str
     action: str

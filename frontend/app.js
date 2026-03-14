@@ -1613,6 +1613,105 @@ function initKafkaOpsOnLoad() {
       if (out && out.textContent) navigator.clipboard.writeText(out.textContent);
     });
   }
+  initKafkaAddModal();
+}
+
+function openKafkaAddModal() {
+  const modal = $('kafka-add-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  const problemEl = $('kafka-add-problem');
+  if (problemEl) problemEl.value = '';
+  const statusEl = $('kafka-add-status');
+  if (statusEl) statusEl.textContent = '';
+}
+
+let _kafkaAddGeneratePollTimer = null;
+
+function closeKafkaAddModal() {
+  if (_kafkaAddGeneratePollTimer) {
+    clearInterval(_kafkaAddGeneratePollTimer);
+    _kafkaAddGeneratePollTimer = null;
+  }
+  const modal = $('kafka-add-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function initKafkaAddModal() {
+  const addBtn = $('btn-kafka-ops-add');
+  const closeBtn = $('kafka-add-modal-close');
+  const cancelBtn = $('kafka-add-cancel');
+  const backdrop = document.getElementById('kafka-add-modal-backdrop');
+  const form = $('kafka-add-form');
+  if (!addBtn || !form || addBtn.dataset.bound === '1') return;
+  addBtn.dataset.bound = '1';
+  addBtn.addEventListener('click', openKafkaAddModal);
+  if (closeBtn) closeBtn.addEventListener('click', closeKafkaAddModal);
+  if (cancelBtn) cancelBtn.addEventListener('click', closeKafkaAddModal);
+  if (backdrop) backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeKafkaAddModal(); });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const problem = $('kafka-add-problem').value?.trim();
+    const statusEl = $('kafka-add-status');
+    const submitBtn = $('kafka-add-submit');
+    if (!problem) {
+      statusEl.textContent = '请填写问题名称';
+      statusEl.className = 'text-sm text-red-600';
+      return;
+    }
+    submitBtn.disabled = true;
+    statusEl.textContent = '提交中...';
+    statusEl.className = 'text-sm text-gray-600';
+    try {
+      const res = await fetch(API_BASE + '/api/kafka-ops/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ problem }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        const initialCount = (KAFKA_OPS_LAST_PROBLEMS || []).length;
+        statusEl.textContent = '已提交。正在检测新案例（约 1–3 分钟）…';
+        statusEl.className = 'text-sm text-green-600';
+        const maxPolls = 12;
+        let pollCount = 0;
+        const doPoll = async () => {
+          pollCount++;
+          try {
+            if (typeof loadKafkaOpsStatus === 'function') await loadKafkaOpsStatus();
+            const current = KAFKA_OPS_LAST_PROBLEMS || [];
+            if (current.length > initialCount) {
+              if (_kafkaAddGeneratePollTimer) {
+                clearInterval(_kafkaAddGeneratePollTimer);
+                _kafkaAddGeneratePollTimer = null;
+              }
+              statusEl.textContent = '新案例已生成，请查看列表。';
+              submitBtn.disabled = false;
+              return;
+            }
+          } catch (err) {}
+          if (pollCount >= maxPolls) {
+            if (_kafkaAddGeneratePollTimer) {
+              clearInterval(_kafkaAddGeneratePollTimer);
+              _kafkaAddGeneratePollTimer = null;
+            }
+            statusEl.textContent = '超时。请稍后手动点击刷新列表查看。';
+            submitBtn.disabled = false;
+          }
+        };
+        doPoll();
+        _kafkaAddGeneratePollTimer = setInterval(doPoll, 15000);
+      } else {
+        statusEl.textContent = data.detail || '提交失败';
+        statusEl.className = 'text-sm text-red-600';
+        submitBtn.disabled = false;
+      }
+    } catch (err) {
+      statusEl.textContent = 'Error: ' + (err.message || err);
+      statusEl.className = 'text-sm text-red-600';
+      submitBtn.disabled = false;
+    }
+  });
 }
 
 function initRedisOpsOnLoad() {
