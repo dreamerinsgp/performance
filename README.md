@@ -73,7 +73,7 @@ performance/
 
 - **MySQL/Redis/Kafka**：各中间件所在机器的 IP 和端口。MySQL 会在 Validate 或 Deploy 时**自动建库**；**初始化 SQL** 可填写建表等 DDL，会按顺序执行
 - **项目服务器**：部署目标的 IP、SSH 端口、用户、部署路径。**免密登录**：首次部署时在 Deploy 页填写目标服务器的 SSH 密码，会自动执行 ssh-copy-id 完成配置；或手动运行 `ssh-copy-id user@host`。自动配置需安装 `sudo apt install sshpass`
-- **GitHub 仓库**：项目代码地址、分支、子路径（若项目在子目录）
+- **GitHub 仓库**：项目代码地址、分支、子路径（若项目在子目录）。**Private 仓库**：需填写 GitHub Token (PAT)，创建路径：Settings → Developer settings → Personal access tokens，勾选 repo 权限
 - **Gateway 地址**：性能压测目标，通常为 `http://项目服务器IP:8081`
 
 ## 部署步骤

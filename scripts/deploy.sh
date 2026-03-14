@@ -21,7 +21,14 @@ c = json.load(open('$CONFIG_FILE'))
 g = c.get('github', {})
 a = c.get('app_server', {})
 m = c.get('mysql', {})
-print('REPO_URL=\"%s\"' % g.get('repo_url','').strip())
+repo_url = g.get('repo_url','').strip()
+token = (g.get('token') or '').strip()
+# Private repo: inject token into HTTPS URL for clone
+if token and 'github.com' in repo_url and repo_url.startswith('https://'):
+    idx = repo_url.find('github.com')
+    suffix = repo_url[idx:]  # github.com/org/repo.git
+    repo_url = 'https://' + token + '@' + suffix
+print('REPO_URL=\"%s\"' % repo_url.replace('\"', '\\\\\"'))
 print('BRANCH=\"%s\"' % g.get('branch','main').strip())
 print('SUBPATH=\"%s\"' % g.get('subpath','').strip())
 print('APP_HOST=\"%s\"' % a.get('host','').strip())
@@ -84,7 +91,7 @@ else
   PROJECT_ROOT="$CLONE_DIR"
 fi
 
-# Detect project type: DEX (apps/), simple Go (main.go), or cmd-style Go (cmd/main.go)
+# Detect project type: DEX (apps/), go-zero flat (gateway/gateway.go), simple Go (main.go), or cmd-style Go (cmd/main.go)
 PROJECT_TYPE=""
 if [ -d "$PROJECT_ROOT/apps" ]; then
   DEX_APPS="$PROJECT_ROOT/apps"
@@ -94,6 +101,9 @@ elif [ -d "$PROJECT_ROOT/dex_full/apps" ]; then
   DEX_APPS="$PROJECT_ROOT/dex_full/apps"
   MAKE_DIR="$PROJECT_ROOT/dex_full"
   PROJECT_TYPE="dex"
+elif [ -f "$PROJECT_ROOT/go.mod" ] && { [ -f "$PROJECT_ROOT/gateway/gateway.go" ] || [ -f "$PROJECT_ROOT/consumer/consumer.go" ] || [ -f "$PROJECT_ROOT/trade/trade.go" ] || [ -f "$PROJECT_ROOT/market/market.go" ]; }; then
+  MAKE_DIR="$PROJECT_ROOT"
+  PROJECT_TYPE="gozero"
 elif [ -f "$PROJECT_ROOT/main.go" ] && [ -f "$PROJECT_ROOT/go.mod" ]; then
   MAKE_DIR="$PROJECT_ROOT"
   PROJECT_TYPE="simple"
@@ -101,7 +111,7 @@ elif [ -f "$PROJECT_ROOT/cmd/main.go" ] && [ -f "$PROJECT_ROOT/go.mod" ]; then
   MAKE_DIR="$PROJECT_ROOT"
   PROJECT_TYPE="go-cmd"
 else
-  echo "ERROR: Cannot find apps/ (DEX), main.go+go.mod (simple Go), or cmd/main.go+go.mod (Go cmd project) under $PROJECT_ROOT"
+  echo "ERROR: Cannot find apps/ (DEX), gateway/consumer/trade/market (go-zero), main.go+go.mod (simple Go), or cmd/main.go+go.mod (Go cmd project) under $PROJECT_ROOT"
   exit 1
 fi
 
@@ -124,6 +134,25 @@ for name, content in generate_perf_yaml(config).items():
         f.write(content)
     print('Written:', path)
 " || { echo "Config generation failed."; exit 1; }
+elif [ "$PROJECT_TYPE" = "gozero" ]; then
+  # Generate configs for go-zero flat layout (gateway/, consumer/, etc.)
+  python3 -c "
+import json, sys, os
+sys.path.insert(0, '$PERF_DIR/backend')
+from config_generator import generate_perf_yaml
+with open('$CONFIG_FILE') as f:
+    config = json.load(f)
+make_dir = '$MAKE_DIR'.replace('//','/')
+for name, content in generate_perf_yaml(config).items():
+    service = name.replace('-perf.yaml', '')
+    svc_dir = os.path.join(make_dir, service)
+    if os.path.isdir(svc_dir):
+        path = os.path.join(svc_dir, 'etc', service + '.yaml')
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(content)
+        print('Written:', path)
+" || { echo "Config generation failed."; exit 1; }
 fi
 
 # Build
@@ -134,6 +163,21 @@ if [ "$PROJECT_TYPE" = "dex" ]; then
   fi
   if [ ! -d "$MAKE_DIR/build" ]; then
     echo "ERROR: No build/ output. Check Makefile."
+    exit 1
+  fi
+elif [ "$PROJECT_TYPE" = "gozero" ]; then
+  echo "Building (go-zero flat)..."
+  mkdir -p "$MAKE_DIR/build"
+  for svc in gateway consumer trade market websocket; do
+    if [ -f "$MAKE_DIR/$svc/$svc.go" ]; then
+      echo "  Building $svc"
+      mkdir -p "$MAKE_DIR/build/$svc"
+      (cd "$MAKE_DIR" && go build -o build/$svc/$svc ./$svc 2>/dev/null) || echo "    $svc build failed, continuing..."
+      [ -d "$MAKE_DIR/$svc/etc" ] && mkdir -p "$MAKE_DIR/build/$svc/etc" && cp "$MAKE_DIR/$svc/etc/"*.yaml "$MAKE_DIR/build/$svc/etc/" 2>/dev/null || true
+    fi
+  done
+  if [ ! -d "$MAKE_DIR/build/gateway" ] && [ ! -d "$MAKE_DIR/build/consumer" ] && [ ! -d "$MAKE_DIR/build/trade" ] && [ ! -d "$MAKE_DIR/build/market" ]; then
+    echo "ERROR: No go-zero services built. Check go.mod and gateway/consumer/trade/market dirs."
     exit 1
   fi
 elif [ "$PROJECT_TYPE" = "simple" ]; then
@@ -234,7 +278,7 @@ if [ "$PROJECT_TYPE" = "simple" ] && [ -n "$MYSQL_DSN_B64" ]; then
 fi
 
 # Generate start script on server
-if [ "$PROJECT_TYPE" = "dex" ]; then
+if [ "$PROJECT_TYPE" = "dex" ] || [ "$PROJECT_TYPE" = "gozero" ]; then
   $SSH_CMD "cat > $APP_DEPLOY_PATH/start.sh << EOF
 #!/bin/bash
 cd $APP_DEPLOY_PATH/build

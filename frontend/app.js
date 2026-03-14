@@ -162,6 +162,7 @@ async function loadConfig() {
     $('github-repo').value = c.github?.repo_url || '';
     $('github-branch').value = c.github?.branch || 'main';
     $('github-subpath').value = c.github?.subpath || '';
+    $('github-token').value = c.github?.token || '';
     $('gateway-url').value = c.gateway_url || (c.app_server?.host ? 'http://' + c.app_server.host + ':8081' : '');
     const ocUrl = $('openclaw-gateway-url');
     const ocToken = $('openclaw-hooks-token');
@@ -204,7 +205,12 @@ $('config-form').addEventListener('submit', async (e) => {
       deploy_path: $('app-server-deploy-path').value || '/opt/dex',
       mysql_ops_path: $('app-server-mysql-ops-path').value || '/opt/dex/mysql-ops-learning',
     },
-    github: { repo_url: $('github-repo').value, branch: $('github-branch').value, subpath: $('github-subpath').value },
+    github: {
+      repo_url: $('github-repo').value,
+      branch: $('github-branch').value,
+      subpath: $('github-subpath').value,
+      token: $('github-token').value || '',
+    },
     gateway_url: $('gateway-url').value || 'http://127.0.0.1:8080',
     openclaw: {
       gateway_url: ($('openclaw-gateway-url')?.value || 'http://127.0.0.1:18789').trim(),
@@ -344,6 +350,65 @@ async function loadPerftestConfig() {
   $('perftest-duration').value = c.duration_seconds ?? 30;
   $('perftest-endpoints').value = formatEndpointsForTextarea(c.endpoints) || '/api/health';
 }
+
+async function perftestDiscover() {
+  const btn = $('btn-perftest-discover');
+  const out = $('perftest-discover-result');
+  btn.disabled = true;
+  out.innerHTML = '<p class="text-gray-500">加载中...</p>';
+  try {
+    const res = await fetch(API_BASE + '/api/perftest/discover');
+    const data = await res.json();
+    const projects = data.projects || [];
+    const msg = data.message || '';
+    if (projects.length === 0) {
+      out.innerHTML = '<p class="text-gray-500">' + (msg || '暂无可用接口。请先部署项目。') + '</p>';
+      return;
+    }
+    const sourceNote = data.source === 'deployed' ? '<span class="text-green-600 text-xs">' + (msg || '来自已部署项目') + '</span>' : '';
+    out.innerHTML = sourceNote + '<div class="mt-2 space-y-3">' + projects.map((p, pid) => {
+      const eps = (p.endpoints || []).map(e => `
+        <div class="flex items-center justify-between py-1 px-2 hover:bg-white rounded group">
+          <code class="text-xs">${(e.method || 'GET').toUpperCase()} ${e.path}</code>
+          <button type="button" class="perftest-add-ep opacity-0 group-hover:opacity-100 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200" data-path="${(e.path || '').replace(/"/g, '&quot;')}" data-method="${(e.method || 'GET').toUpperCase()}">添加</button>
+        </div>
+      `).join('');
+      const epsJson = encodeURIComponent(JSON.stringify((p.endpoints || []).map(e => ({ path: e.path, method: (e.method || 'GET').toUpperCase() }))));
+      return `
+        <div class="border rounded bg-white overflow-hidden" data-project-idx="${pid}">
+          <div class="px-3 py-2 bg-slate-100 font-medium text-sm flex justify-between items-center">
+            <span>${p.name || p.id}</span>
+            <button type="button" class="perftest-add-all px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200" data-endpoints="${epsJson}">添加全部</button>
+          </div>
+          <div class="divide-y divide-gray-100">${eps || '<p class="text-gray-400 text-xs px-3 py-2">无接口</p>'}</div>
+        </div>
+      `;
+    }).join('') + '</div>';
+    const addEndpoint = (path, method) => {
+      const line = `${path},${method},1`;
+      const ta = $('perftest-endpoints');
+      const cur = ta.value.trim();
+      ta.value = cur ? (cur + '\n' + line) : line;
+    };
+    out.querySelectorAll('.perftest-add-ep').forEach(el => {
+      el.addEventListener('click', () => addEndpoint(el.dataset.path, el.dataset.method || 'GET'));
+    });
+    out.querySelectorAll('.perftest-add-all').forEach(el => {
+      el.addEventListener('click', () => {
+        try {
+          const raw = el.dataset.endpoints ? decodeURIComponent(el.dataset.endpoints) : '[]';
+          const eps = JSON.parse(raw);
+          eps.forEach(e => addEndpoint(e.path, e.method || 'GET'));
+        } catch (_) {}
+      });
+    });
+  } catch (e) {
+    out.innerHTML = '<p class="text-red-600">加载失败: ' + e.message + '</p>';
+  }
+  btn.disabled = false;
+}
+
+$('btn-perftest-discover').addEventListener('click', perftestDiscover);
 
 $('btn-save-perftest').addEventListener('click', async () => {
   const endpoints = parseEndpointsText($('perftest-endpoints').value);

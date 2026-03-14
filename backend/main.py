@@ -68,6 +68,7 @@ class GithubConfig(BaseModel):
     repo_url: str = ""
     branch: str = "main"
     subpath: str = ""  # e.g. "dex_full" if project root is inside repo
+    token: str = ""  # GitHub PAT for private repos (HTTPS clone)
 
 
 class OpenClawConfig(BaseModel):
@@ -353,6 +354,155 @@ def get_metrics():
         machines.append({"name": "Kafka", "host": b.split(":")[0] if ":" in b else b, "note": "配置 SSH 后可查看监控"})
 
     return {"machines": machines}
+
+
+def _discover_endpoints_from_gateway_yaml(gateway_path: Path) -> Optional[Dict[str, Any]]:
+    """Parse gateway.yaml and return { projects: [{ id, name, endpoints }], source: 'gateway' }."""
+    try:
+        import yaml
+        data = yaml.safe_load(gateway_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not data:
+        return None
+    upstreams = data.get("Upstreams") or []
+    # Group by path prefix: /v1/market -> market
+    by_prefix: Dict[str, List[Dict[str, str]]] = {}
+    name_map = {
+        "market": "Market（行情）",
+        "trade": "Trade（交易）",
+        "account": "Account（账户）",
+        "consumer": "Consumer（消费）",
+        "dcmsg": "Discord 消息",
+        "twmsg": "Twitter 消息",
+        "rebate": "Rebate（返佣）",
+        "admin": "Admin 管理",
+        "campaign": "Campaign（活动）",
+        "push": "Push（推送）",
+    }
+    for up in upstreams:
+        if not isinstance(up, dict):
+            continue
+        grpc = up.get("Grpc")
+        mappings = (grpc.get("Mappings") or []) if isinstance(grpc, dict) else []
+        if not mappings:
+            mappings = up.get("Mappings") or []  # go-zero: Mappings 与 Grpc 同级
+        for m in mappings:
+            if not isinstance(m, dict):
+                continue
+            path = (m.get("Path") or "").strip()
+            method = (m.get("Method") or "get").upper()
+            if not path or path == "/":
+                continue
+            # /v1/market/xxx -> market, /v1/admin/xxx -> admin
+            parts = path.strip("/").split("/")
+            prefix = parts[1] if len(parts) >= 2 else "other"
+            if prefix not in by_prefix:
+                by_prefix[prefix] = []
+            by_prefix[prefix].append({"path": path, "method": method})
+    projects = []
+    for pid, eps in sorted(by_prefix.items()):
+        projects.append({
+            "id": pid,
+            "name": name_map.get(pid, pid),
+            "endpoints": eps,
+        })
+    return {"source": "gateway", "projects": projects}
+
+
+def _get_deployed_project_root() -> Optional[Tuple[Path, Path]]:
+    """Get (project_root, clone_dir) of the deployed project (from Infra config + workspace)."""
+    config = get_infra_config()
+    if not config:
+        return None
+    github = config.get("github") or {}
+    repo_url = (github.get("repo_url") or "").strip()
+    subpath = (github.get("subpath") or "").strip()
+    if not repo_url:
+        return None
+    repo_name = Path(repo_url.rstrip("/")).name
+    if repo_name.endswith(".git"):
+        repo_name = repo_name[:-4]
+    ws = PERF_DIR / "workspace"
+    clone_dir = ws / repo_name
+    if not clone_dir.exists() or not clone_dir.is_dir():
+        return None
+    project_root = clone_dir / subpath if subpath else clone_dir
+    if not project_root.exists():
+        return None
+    return (project_root, clone_dir)
+
+
+def _ensure_git_branch(clone_dir: Path, branch: str) -> bool:
+    """Checkout the configured branch in workspace clone. 确保读取 infra 配置的分支."""
+    if not branch or not (clone_dir / ".git").exists():
+        return True
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", branch],
+            cwd=str(clone_dir),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        r = subprocess.run(
+            ["git", "checkout", "-B", branch, f"origin/{branch}"],
+            cwd=str(clone_dir),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if r.returncode != 0:
+            subprocess.run(
+                ["git", "checkout", branch],
+                cwd=str(clone_dir),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _discover_perftest_endpoints() -> Dict[str, Any]:
+    """Discover testable projects and HTTP endpoints from the deployed project's gateway.yaml only."""
+    pair = _get_deployed_project_root()
+    if not pair:
+        return {
+            "source": "deployed",
+            "projects": [],
+            "message": "请先完成部署。发现接口仅从已部署项目的 Gateway 配置读取。",
+        }
+    project_root, clone_dir = pair
+    # 按 Infra 配置的分支 checkout，确保读取的是正确分支的 gateway.yaml
+    config = get_infra_config() or {}
+    branch = (config.get("github") or {}).get("branch") or "main"
+    _ensure_git_branch(clone_dir, branch)
+    # 与 deploy.sh 一致的路径：DEX / go-zero / 嵌套 dex_full
+    candidates = [
+        project_root / "apps" / "gateway" / "etc" / "gateway.yaml",
+        project_root / "gateway" / "etc" / "gateway.yaml",
+        project_root / "dex_full" / "apps" / "gateway" / "etc" / "gateway.yaml",
+    ]
+    for p in candidates:
+        if p.exists():
+            result = _discover_endpoints_from_gateway_yaml(p)
+            if result:
+                result["source"] = "deployed"
+                result["message"] = "来自已部署项目的 Gateway 配置"
+                return result
+    return {
+        "source": "deployed",
+        "projects": [],
+        "message": "已部署项目中未找到 gateway.yaml（apps/gateway/etc/ 或 gateway/etc/）。",
+    }
+
+
+@app.get("/api/perftest/discover")
+def discover_perftest_endpoints():
+    """List all testable projects and HTTP endpoints (from gateway.yaml or preset)."""
+    return _discover_perftest_endpoints()
 
 
 @app.get("/api/perftest/config")

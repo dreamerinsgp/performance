@@ -1,0 +1,59 @@
+{
+  "projects": [
+    {
+      "id": "market",
+      "name": "Market（行情）",
+      "endpoints": [
+        {"path": "/v1/market/get_candlestick", "method": "GET"},
+        {"path": "/v1/market/get_token_info", "method": "GET"},
+        {"path": "/v1/market/get_trade_list", "method": "GET"},
+        {"path": "/v1/market/token_holder_list", "method": "GET"},
+        {"path": "/v1/market/index_trending", "method": "GET"},
+        {"path": "/v1/market/index_pump", "method": "GET"},
+        {"path": "/v1/market/index_favorite", "method": "GET"},
+        {"path": "/v1/market/get_token_by_pair", "method": "GET"},
+        {"path": "/v1/market/get_pair_info", "method": "GET"},
+        {"path": "/v1/market/search", "method": "GET"},
+        {"path": "/v1/market/trending_search", "method": "GET"},
+        {"path": "/v1/market/auditInfo", "method": "GET"},
+        {"path": "/v1/market/get_gas_info", "method": "GET"},
+        {"path": "/v1/market/get_top10", "method": "GET"},
+        {"path": "/v1/market/get_pairs_by_time", "method": "GET"},
+        {"path": "/v1/market/get_klines_by_pairs", "method": "POST"}
+      ]
+    },
+    {
+      "id": "trade",
+      "name": "Trade（交易）",
+      "endpoints": [
+        {"path": "/v1/trade/create_market_order", "method": "POST"},
+        {"path": "/v1/trade/query_trade_history", "method": "GET"},
+        {"path": "/v1/trade/query_order_history", "method": "GET"},
+        {"path": "/v1/trade/create_limit_order", "method": "POST"},
+        {"path": "/v1/trade/create_trailing_stop", "method": "POST"},
+        {"path": "/v1/trade/cancel_order", "method": "POST"},
+        {"path": "/v1/trade/query_current_order", "method": "GET"},
+        {"path": "/v1/trade/query_my_holding", "method": "GET"},
+        {"path": "/v1/trade/get_gas_info", "method": "GET"}
+      ]
+    },
+    {
+      "id": "account",
+      "name": "Account（账户）",
+      "endpoints": [
+        {"path": "/v1/account/get_banner_list", "method": "GET"},
+        {"path": "/v1/account/check_for_app_update", "method": "GET"},
+        {"path": "/v1/account/get_transaction_config", "method": "GET"}
+      ]
+    },
+    {
+      "id": "common",
+      "name": "通用",
+      "endpoints": [
+        {"path": "/api/health", "method": "GET"},
+        {"path": "/v1/market/get_candlestick", "method": "GET"},
+        {"path": "/v1/market/index_trending", "method": "GET"}
+      ]
+    }
+  ]
+}
